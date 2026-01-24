@@ -1,9 +1,18 @@
+import os
+import json
+import tempfile
 from collections import Counter
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional
+
+from tokenizers import Tokenizer
+from tokenizers.models import BPE
+from tokenizers.trainers import BpeTrainer
+from tokenizers.pre_tokenizers import Whitespace
+from transformers import GPT2Tokenizer
 
 
 class BPETokenizer:
-    """Byte Pair Encoding tokenizer implementation."""
+    """Byte Pair Encoding tokenizer implementation (from scratch)."""
 
     def __init__(self):
         self.vocab = []
@@ -48,7 +57,6 @@ class BPETokenizer:
 
     def train(self, corpus: List[str], vocab_size: int):
         """Train the BPE tokenizer on a corpus."""
-        # Get word frequencies
         word_freqs = self._get_word_freqs(corpus)
 
         # Build base vocabulary (unique characters)
@@ -58,7 +66,7 @@ class BPETokenizer:
                 base_vocab.add(char)
         self.vocab = sorted(list(base_vocab))
 
-        # Initialize word splits (each word split into characters)
+        # Initialize word splits
         word_splits = {word: list(word) for word in word_freqs.keys()}
 
         # Learn merges until vocab_size is reached
@@ -67,15 +75,12 @@ class BPETokenizer:
             if not pair_freqs:
                 break
 
-            # Find most frequent pair
             best_pair = max(pair_freqs, key=pair_freqs.get)
             merged_token = best_pair[0] + best_pair[1]
 
-            # Add merge rule and new token to vocab
             self.merges[best_pair] = merged_token
             self.vocab.append(merged_token)
 
-            # Apply merge to all word splits
             word_splits = self._merge_pair(word_splits, best_pair)
 
     def tokenize(self, text: str) -> List[str]:
@@ -84,10 +89,8 @@ class BPETokenizer:
         tokens = []
 
         for word in words:
-            # Split word into characters
             word_tokens = list(word)
 
-            # Apply merges in order
             for pair, merged in self.merges.items():
                 i = 0
                 while i < len(word_tokens) - 1:
@@ -99,3 +102,150 @@ class BPETokenizer:
             tokens.extend(word_tokens)
 
         return tokens
+
+
+class HuggingFaceBPETokenizer:
+    """
+    BPE Tokenizer using HuggingFace's tokenizers library.
+
+    Learns vocabulary using BPETokenizer, then converts to GPT2Tokenizer format
+    as specified in Practical 4.
+    """
+
+    def __init__(self, vocab_size: int = 50000):
+        self.vocab_size = vocab_size
+        self.tokenizer: Optional[GPT2Tokenizer] = None
+        self._base_tokenizer: Optional[Tokenizer] = None
+
+    def train(self, texts: List[str], save_dir: Optional[str] = None):
+        """
+        Train BPE tokenizer on texts and convert to GPT2Tokenizer.
+
+        Args:
+            texts: List of text strings to train on
+            save_dir: Directory to save tokenizer files (optional)
+        """
+        # Initialize BPE tokenizer from HuggingFace tokenizers
+        self._base_tokenizer = Tokenizer(BPE(unk_token="[UNK]"))
+        self._base_tokenizer.pre_tokenizer = Whitespace()
+
+        # Train with special tokens
+        trainer = BpeTrainer(
+            vocab_size=self.vocab_size,
+            special_tokens=["[PAD]", "[BOS]", "[EOS]", "[UNK]"],
+            show_progress=True
+        )
+
+        # Train on texts
+        self._base_tokenizer.train_from_iterator(texts, trainer=trainer)
+
+        # Convert to GPT2Tokenizer format
+        self._convert_to_gpt2_tokenizer(save_dir)
+
+    def _convert_to_gpt2_tokenizer(self, save_dir: Optional[str] = None):
+        """Convert the trained BPE tokenizer to GPT2Tokenizer format."""
+        if save_dir is None:
+            save_dir = tempfile.mkdtemp()
+
+        # Get vocabulary and merges from the trained tokenizer
+        vocab = self._base_tokenizer.get_vocab()
+
+        # Save vocab.json
+        vocab_file = os.path.join(save_dir, "vocab.json")
+        with open(vocab_file, 'w', encoding='utf-8') as f:
+            json.dump(vocab, f, ensure_ascii=False)
+
+        # Get merges from the BPE model
+        tokenizer_json = self._base_tokenizer.to_str()
+        tokenizer_dict = json.loads(tokenizer_json)
+
+        merges = []
+        if 'model' in tokenizer_dict and 'merges' in tokenizer_dict['model']:
+            merges = tokenizer_dict['model']['merges']
+
+        # Save merges.txt
+        merges_file = os.path.join(save_dir, "merges.txt")
+        with open(merges_file, 'w', encoding='utf-8') as f:
+            f.write("#version: 0.2\n")
+            for merge in merges:
+                # Merges can be lists ["a", "b"] or strings "a b"
+                if isinstance(merge, list):
+                    f.write(" ".join(merge) + "\n")
+                else:
+                    f.write(merge + "\n")
+
+        # Create GPT2Tokenizer from saved files
+        self.tokenizer = GPT2Tokenizer(
+            vocab_file=vocab_file,
+            merges_file=merges_file,
+            unk_token="[UNK]",
+            bos_token="[BOS]",
+            eos_token="[EOS]",
+            pad_token="[PAD]"
+        )
+
+        self.tokenizer.pad_token_id = self.tokenizer.convert_tokens_to_ids("[PAD]")
+        self.tokenizer.bos_token_id = self.tokenizer.convert_tokens_to_ids("[BOS]")
+        self.tokenizer.eos_token_id = self.tokenizer.convert_tokens_to_ids("[EOS]")
+        self.tokenizer.unk_token_id = self.tokenizer.convert_tokens_to_ids("[UNK]")
+
+    def encode(self, text: str, add_special_tokens: bool = True) -> List[int]:
+        """Encode text to token IDs."""
+        if self.tokenizer is None:
+            raise ValueError("Tokenizer not trained. Call train() first.")
+
+        ids = self.tokenizer.encode(text, add_special_tokens=False)
+
+        if add_special_tokens:
+            ids = [self.tokenizer.bos_token_id] + ids + [self.tokenizer.eos_token_id]
+
+        return ids
+
+    def decode(self, ids: List[int], skip_special_tokens: bool = True) -> str:
+        """Decode token IDs to text."""
+        if self.tokenizer is None:
+            raise ValueError("Tokenizer not trained. Call train() first.")
+        return self.tokenizer.decode(ids, skip_special_tokens=skip_special_tokens)
+
+    def tokenize(self, text: str) -> List[str]:
+        """Tokenize text to tokens."""
+        if self.tokenizer is None:
+            raise ValueError("Tokenizer not trained. Call train() first.")
+        return self.tokenizer.tokenize(text)
+
+    @property
+    def vocab_size_actual(self) -> int:
+        """Return actual vocabulary size."""
+        if self.tokenizer is None:
+            return 0
+        return len(self.tokenizer)
+
+    @property
+    def pad_idx(self) -> int:
+        return self.tokenizer.pad_token_id if self.tokenizer else 0
+
+    @property
+    def bos_idx(self) -> int:
+        return self.tokenizer.bos_token_id if self.tokenizer else 1
+
+    @property
+    def eos_idx(self) -> int:
+        return self.tokenizer.eos_token_id if self.tokenizer else 2
+
+    @property
+    def unk_idx(self) -> int:
+        return self.tokenizer.unk_token_id if self.tokenizer else 3
+
+    def save(self, save_dir: str):
+        """Save tokenizer to directory."""
+        if self.tokenizer is None:
+            raise ValueError("Tokenizer not trained. Call train() first.")
+        os.makedirs(save_dir, exist_ok=True)
+        self.tokenizer.save_pretrained(save_dir)
+
+    @classmethod
+    def load(cls, save_dir: str) -> 'HuggingFaceBPETokenizer':
+        """Load tokenizer from directory."""
+        instance = cls()
+        instance.tokenizer = GPT2Tokenizer.from_pretrained(save_dir)
+        return instance

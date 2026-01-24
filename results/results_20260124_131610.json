@@ -1,0 +1,102 @@
+{
+  "config": {
+    "vocab_size": 50000,
+    "d_model": 64,
+    "n_heads": 4,
+    "num_encoder_layers": 2,
+    "num_decoder_layers": 2,
+    "dim_feedforward": 128,
+    "dropout": 0.1,
+    "max_len": 64,
+    "batch_size": 32,
+    "num_epochs": 5,
+    "warmup_steps": 1000,
+    "max_grad_norm": 1.0,
+    "train_subset_size": 50000,
+    "val_subset_size": 5000,
+    "test_subset_size": 1000,
+    "min_length": 5,
+    "max_length": 64
+  },
+  "train_losses": [
+    3.788044307602573,
+    2.5779233142037614,
+    2.375754775104047,
+    2.263842349012769,
+    2.1896862215669355
+  ],
+  "val_losses": [
+    4.3300345703795715,
+    4.05689478968526,
+    3.973204513172527,
+    3.9239073245079963,
+    3.8391091404380377
+  ],
+  "learning_rates": [
+    0.003161771817141842,
+    0.002235710292465509,
+    0.0018254498097430146,
+    0.001580885908570921,
+    0.0014139873424944386
+  ],
+  "timestamp": "20260124_131610",
+  "bleu": 0.0,
+  "bleu_precisions": [
+    0.32567636549259826,
+    0.0031282586027111575,
+    0.0033333333333333335,
+    0.0
+  ],
+  "sample_translations": [
+    {
+      "source": "28-j\u00e4hriger Koch in San Francisco Mall tot aufgefunden",
+      "reference": "28-Year-Old Chef Found Dead at San Francisco Mall",
+      "prediction": "Inrecentyearsagothatthepreviousspeakerwasmadeinthepreviousspeakertobemadeinthepreviousspeaker."
+    },
+    {
+      "source": "Ein 28-j\u00e4hriger Koch, der vor kurzem nach San Francisco gezogen ist, wurde im Treppenhaus eines \u00f6rtlichen Einkaufzentrums tot aufgefunden.",
+      "reference": "A 28-year-old chef who had recently moved to San Francisco was found dead in the stairwell of a local mall this week.",
+      "prediction": "Arecentyearago,therecentspeakerrecentlyrecentlywasmadebytherecentspeakerwasmadebyafewtimesagointherecentyears."
+    },
+    {
+      "source": "Der Bruder des Opfers sagte aus, dass er sich niemanden vorstellen kann, der ihm schaden wollen w\u00fcrde, Endlich ging es bei ihm wieder bergauf.",
+      "reference": "But the victims brother says he cant think of anyone who would want to hurt him, saying, Things were finally going well for him.",
+      "prediction": "Thevictimsofthevictimsofthevictimsofthevictimsofthepeoplewhoaregoingtobemadebyhimtohimtobemadeinthesametime."
+    },
+    {
+      "source": "Der am Mittwoch morgen in der Westfield Mall gefundene Leichnam wurde als der 28 Jahre alte Frank Galicia aus San Francisco identifiziert, teilte die gerichtsmedizinische Abteilung in San Francisco mit.",
+      "reference": "The body found at the Westfield Mall Wednesday morning was identified as 28-year-old San Francisco resident Frank Galicia, the San Francisco Medical Examiners Office said.",
+      "prediction": "TheNos38ofElEjidowasafewyearsagoasIhavebeenmadebytheoldGovernmentintheoldGovernmentintheoldandtheoldGovernmentin"
+    },
+    {
+      "source": "Das San Francisco Police Department sagte, dass der Tod als Mord eingestuft wurde und die Ermittlungen am Laufen sind.",
+      "reference": "The San Francisco Police Department said the death was ruled a homicide and an investigation is ongoing.",
+      "prediction": "ThefactthattheBritishGovernmenthasbeensaidasthedeathpenaltyandthedeathpenaltyandthedeathpenalty."
+    },
+    {
+      "source": "Der Bruder des Opfers, Louis Galicia, teilte dem ABS Sender KGO in San Francisco mit, dass Frank, der fr\u00fcher als Koch in Boston gearbeitet hat, vor sechs Monaten seinen Traumjob als Koch im Sons & Daughters Restaurant in San Francisco ergattert hatte.",
+      "reference": "The victims brother, Louis Galicia, told ABC station KGO in San Francisco that Frank, previously a line cook in Boston, had landed his dream job as line chef at San Franciscos Sons & Daughters restaurant six months ago.",
+      "prediction": "ThevictimsofthevictimsofthewaroftheAlbanianMinisterfortheAlbanianMinisterfortheAlbanianMinisterhasbeenmadebythepreviousspeakertothepreviousspeakershave"
+    },
+    {
+      "source": "Ein Sprecher des Sons & Daughters sagte, dass sie \u00fcber seinen Tod schockiert und am Boden zerst\u00f6rt seien.",
+      "reference": "A spokesperson for Sons & Daughters said they were shocked and devastated by his death.",
+      "prediction": "AformerformerPrimeMinistersaidthathesaidthathehasbeenmadehisBritishGovernmentandtheBritishGovernment."
+    },
+    {
+      "source": "Wir sind ein kleines Team, das wie eine enge Familie arbeitet und wir werden ihn schmerzlich vermissen, sagte der Sprecher weiter.",
+      "reference": "We are a small team that operates like a close knit family and he will be dearly missed, the spokesperson said.",
+      "prediction": "WeareasmallgovernmentandthefamilyandwehavebeenmadebythefamilyandthedelegationoftheformerPrimeMinister."
+    },
+    {
+      "source": "Unsere Gedanken und unser Beileid sind in dieser schweren Zeit bei Franks Familie und Freunden.",
+      "reference": "Our thoughts and condolences are with Franks family and friends at this difficult time.",
+      "prediction": "OurmessageandourowndelegationarebeingmadeinthisChamberandourownparty."
+    },
+    {
+      "source": "Louis Galicia gab an, dass Frank zun\u00e4chst in Hostels lebte, aber dass, die Dinge f\u00fcr ihn endlich bergauf gingen.",
+      "reference": "Louis Galicia said Frank initially stayed in hostels, but recently, Things were finally going well for him.",
+      "prediction": "Inthemeantime,thefactthattherecenteventshavebeenmadeintherecentyearstobemadeinthesametimetobemadebythesametimeto"
+    }
+  ]
+}

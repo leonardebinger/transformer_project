@@ -1,0 +1,16 @@
+\begin{table}[h]
+\centering
+\caption{Comparison of Standard vs Gated Attention on Synthetic Tasks}
+\label{tab:gated_attention}
+\begin{tabular}{llcccc}
+\toprule
+Task & Model & Accuracy (\%) & Val Loss & Epochs to 90\% & Loss Rate \\
+\midrule
+Copy Task & Standard & 69.6 & 1.666 & 19 & 0.1022 \\
+Copy Task & Gated & \textbf{94.2} & 0.664 & 19 & 0.0840 \\
+\midrule
+Associative Recall & Standard & 52.8 & 2.327 & 1 & 0.2293 \\
+Associative Recall & Gated & 53.2 & 2.365 & 1 & 0.2049 \\
+\bottomrule
+\end{tabular}
+\end{table}
