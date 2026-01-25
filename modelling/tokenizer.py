@@ -7,7 +7,8 @@ from typing import List, Dict, Tuple, Optional
 from tokenizers import Tokenizer
 from tokenizers.models import BPE
 from tokenizers.trainers import BpeTrainer
-from tokenizers.pre_tokenizers import Whitespace
+from tokenizers.pre_tokenizers import ByteLevel
+from tokenizers.decoders import ByteLevel as ByteLevelDecoder
 from transformers import GPT2Tokenizer
 
 
@@ -126,8 +127,10 @@ class HuggingFaceBPETokenizer:
             save_dir: Directory to save tokenizer files (optional)
         """
         # Initialize BPE tokenizer from HuggingFace tokenizers
+        # Use ByteLevel pre-tokenizer to preserve word boundaries (spaces encoded as Ġ)
         self._base_tokenizer = Tokenizer(BPE(unk_token="[UNK]"))
-        self._base_tokenizer.pre_tokenizer = Whitespace()
+        self._base_tokenizer.pre_tokenizer = ByteLevel(add_prefix_space=False)
+        self._base_tokenizer.decoder = ByteLevelDecoder()
 
         # Train with special tokens
         trainer = BpeTrainer(

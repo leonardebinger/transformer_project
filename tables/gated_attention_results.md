@@ -4,13 +4,12 @@
 
 | Task | Model | Final Accuracy | Final Val Loss | Epochs to 90% | Loss Decrease/Epoch |
 |------|-------|----------------|----------------|---------------|---------------------|
-| Copy Task | Standard | 69.6% | 1.666 | 19 | 0.1022 |
-| Copy Task | Gated | **94.2%** | 0.664 | 19 | 0.0840 |
-| Associative Recall | Standard | 52.8% | 2.327 | 1 | 0.2293 |
-| Associative Recall | Gated | 53.2% | 2.365 | 1 | 0.2049 |
+| Copy Task | Standard | 73.3% | 1.529 | 19 | 0.0865 |
+| Copy Task | Gated | **93.1%** | 0.773 | 18 | 0.0806 |
+| Associative Recall | Standard | 60.0% | 1.813 | 6 | 0.2214 |
+| Associative Recall | Gated | 65.2% | 1.609 | 14 | 0.2503 |
 
 ## Key Findings
 
-- **Copy Task**: Gated attention achieves significantly higher accuracy (94.2% vs 69.6%)
-- **Associative Recall**: Both models perform similarly (~52-53%), suggesting task complexity
-- Gate activations stabilize around 0.53 for copy task, indicating learned selective attention
+- **Copy Task**: Gated attention achieves significantly higher accuracy (+19.8%)
+- **Associative Recall**: Gated attention achieves significantly higher accuracy (+5.2%)

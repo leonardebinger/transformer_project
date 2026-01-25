@@ -1,0 +1,120 @@
+{
+  "model_path": "results/model_20260125_120756.pt",
+  "tokenizer_path": "results/tokenizer_20260125_120756",
+  "bleu": 0.020467381898369445,
+  "bleu_precisions": [
+    0.22729193071398396,
+    0.043228936921041024,
+    0.007383479464697739,
+    0.0024189646831156266
+  ],
+  "num_samples": 100,
+  "error_analysis": {
+    "empty_output": 0,
+    "repetition": 12,
+    "truncated": 0,
+    "reasonable": 88
+  },
+  "sample_translations": [
+    {
+      "source": "28-j\u00e4hriger Koch in San Francisco Mall tot aufgefunden",
+      "reference": "28-Year-Old Chef Found Dead at San Francisco Mall",
+      "prediction": "The Social Minister has been held in the Middle East-southis-southis."
+    },
+    {
+      "source": "Ein 28-j\u00e4hriger Koch, der vor kurzem nach San Francisco gezogen ist, wurde im Treppenhaus eines \u00f6rtlichen Einkaufzentrums tot aufgefunden.",
+      "reference": "A 28-year-old chef who had recently moved to San Francisco was found dead in the stairwell of a local mall this week.",
+      "prediction": "A number of 28, the former Minister was recently recently recently recently in the former Minister, the European Investment Bank has been held in a special community."
+    },
+    {
+      "source": "Der Bruder des Opfers sagte aus, dass er sich niemanden vorstellen kann, der ihm schaden wollen w\u00fcrde, Endlich ging es bei ihm wieder bergauf.",
+      "reference": "But the victims brother says he cant think of anyone who would want to hurt him, saying, Things were finally going well for him.",
+      "prediction": "The former Minister said that he has been able to be able to see the fact that he could be able to be able to be able to be able to be able to keep it."
+    },
+    {
+      "source": "Der am Mittwoch morgen in der Westfield Mall gefundene Leichnam wurde als der 28 Jahre alte Frank Galicia aus San Francisco identifiziert, teilte die gerichtsmedizinische Abteilung in San Francisco mit.",
+      "reference": "The body found at the Westfield Mall Wednesday morning was identified as 28-year-old San Francisco resident Frank Galicia, the San Francisco Medical Examiners Office said.",
+      "prediction": "The vote will be taken in the end of the BSE and the old old old old old old-souths, as a number of years ago, which has been made in the former Minister of the former Minister."
+    },
+    {
+      "source": "Das San Francisco Police Department sagte, dass der Tod als Mord eingestuft wurde und die Ermittlungen am Laufen sind.",
+      "reference": "The San Francisco Police Department said the death was ruled a homicide and an investigation is ongoing.",
+      "prediction": "The former Minister said that the death of the war has been made as a serious risk of the Russian authorities."
+    },
+    {
+      "source": "Der Bruder des Opfers, Louis Galicia, teilte dem ABS Sender KGO in San Francisco mit, dass Frank, der fr\u00fcher als Koch in Boston gearbeitet hat, vor sechs Monaten seinen Traumjob als Koch im Sons & Daughters Restaurant in San Francisco ergattert hatte.",
+      "reference": "The victims brother, Louis Galicia, told ABC station KGO in San Francisco that Frank, previously a line cook in Boston, had landed his dream job as line chef at San Franciscos Sons & Daughters restaurant six months ago.",
+      "prediction": "The former Minister, the fact of the European Investment Bank, the former Minister, the former Minister, has been held in the former Minister, as a number of months ago, as a number of months ago, as a number of former Minister, he has been held in the past, and his colleague, as long"
+    },
+    {
+      "source": "Ein Sprecher des Sons & Daughters sagte, dass sie \u00fcber seinen Tod schockiert und am Boden zerst\u00f6rt seien.",
+      "reference": "A spokesperson for Sons & Daughters said they were shocked and devastated by his death.",
+      "prediction": "A former Minister said, the fact that it has been said that it has been destroyed and the war."
+    },
+    {
+      "source": "Wir sind ein kleines Team, das wie eine enge Familie arbeitet und wir werden ihn schmerzlich vermissen, sagte der Sprecher weiter.",
+      "reference": "We are a small team that operates like a close knit family and he will be dearly missed, the spokesperson said.",
+      "prediction": "We are a small small-sized and a small-sized and we are doing a great deal of the oil industry."
+    },
+    {
+      "source": "Unsere Gedanken und unser Beileid sind in dieser schweren Zeit bei Franks Familie und Freunden.",
+      "reference": "Our thoughts and condolences are with Franks family and friends at this difficult time.",
+      "prediction": "Our approach and our family is the right of the family and children."
+    },
+    {
+      "source": "Louis Galicia gab an, dass Frank zun\u00e4chst in Hostels lebte, aber dass, die Dinge f\u00fcr ihn endlich bergauf gingen.",
+      "reference": "Louis Galicia said Frank initially stayed in hostels, but recently, Things were finally going well for him.",
+      "prediction": "The former Minister has been able to be able to start by the fact that the armed forces, but the way of the issues of the past."
+    },
+    {
+      "source": "Er fand eine Wohnung, er hatte eine Freundin, teilte Louis Garcia KGO mit.",
+      "reference": "He found an apartment, he was dating a girl, Louis Galicia told KGO.",
+      "prediction": "It was a very often recognised, a result of a very positive and the day of the people."
+    },
+    {
+      "source": "Louis Galicia sagte, dass er sich niemanden vorstellen k\u00f6nne, der seinem j\u00fcngeren Bruder schaden wollen w\u00fcrde.",
+      "reference": "Louis Galicia said he could not think of anyone who would want to hurt his younger brother.",
+      "prediction": "It is the fact that he said that he would be able to be able to be able to be able to be able to be able to be able to be able to be able to be able to be able to be able to be able to be able to be able to be able to be able to be able"
+    },
+    {
+      "source": "Er war ein freundlicher Mensch mit einem gro\u00dfen Herzen.",
+      "reference": "He was a kind spirit with a big heart.",
+      "prediction": "It was a great deal of man who was a great deal with a great deal of great deal."
+    },
+    {
+      "source": "Seine Art mit seiner Familie zu verbinden war es, uns immer etwas zu kochen, uns das Abendessen zuzubereiten, sagte Louis Galicia.",
+      "reference": "His way of connecting with the family was always making us a dish, making us dinner, Louis Galicia said.",
+      "prediction": "It was a matter of view to the family, which was always a little time ago ago, which we said that we said."
+    },
+    {
+      "source": "Er wollte nie an irgendeiner Art von Auseinandersetzung teilnehmen.",
+      "reference": "He never wanted to be in any kind of altercation.",
+      "prediction": "It has never been enough to be able to take place in any way."
+    },
+    {
+      "source": "Er war der Bruder, der mit dem Strom schwamm.",
+      "reference": "He was the brother that went with the flow.",
+      "prediction": "It was the case of the fact that the postal service is to be used."
+    },
+    {
+      "source": "Bei allem, was in der Welt schief l\u00e4uft, war er dieser ungeschliffene Diamant, der jeden Tag hell leuchtete, sagte er.",
+      "reference": "With everything else thats going wrong with the world, he was that diamond in the rough that was shining bright every day, he said.",
+      "prediction": "In particular, the world was the fact that he was the fact that he was the day of the day, and the day he said."
+    },
+    {
+      "source": "Jeder, der Informationen zu dem Fall hat, wird gebeten das Hinweistelefon des SFPD unter der Nummer 415-575-4444 anzurufen.",
+      "reference": "Anyone with information is asked to call the SFPD Tip Line at 415-575-4444.",
+      "prediction": "No information is the case that the case of the British Office will be able to be able to be able to be taken into the end of the end of the end of the end of the debt.5-south.5-south.5-south.5-south."
+    },
+    {
+      "source": "Jennifer Aniston: Ich werde immer in Schubladen gesteckt",
+      "reference": "Jennifer Aniston: Im always pigeonholed",
+      "prediction": "I shall always be able to see the fact that I will always be a little thing in the past."
+    },
+    {
+      "source": "Jennifer Aniston muss nicht immer perfekt oder erfolgreich sein.",
+      "reference": "Jennifer Aniston need not always be perfect or successful.",
+      "prediction": "The overall situation is not always a long way of the NATO or not always."
+    }
+  ]
+}

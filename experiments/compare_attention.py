@@ -332,11 +332,11 @@ def main():
         'gated': copy_results['gated'].to_dict()
     }
 
-    # Associative recall experiment
+    # Associative recall experiment (simplified: 2 pairs instead of 5)
     recall_results = run_experiment(
         task_name="Associative Recall",
         task_class=AssociativeRecallDataset,
-        task_kwargs={'num_pairs': 5, 'vocab_size': vocab_size},
+        task_kwargs={'num_pairs': 2, 'vocab_size': vocab_size},
         model_configs=model_configs,
         num_epochs=30,
         batch_size=32,

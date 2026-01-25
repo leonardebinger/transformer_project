@@ -1,0 +1,102 @@
+{
+  "config": {
+    "vocab_size": 50000,
+    "d_model": 64,
+    "n_heads": 4,
+    "num_encoder_layers": 2,
+    "num_decoder_layers": 2,
+    "dim_feedforward": 128,
+    "dropout": 0.1,
+    "max_len": 64,
+    "batch_size": 32,
+    "num_epochs": 5,
+    "warmup_steps": 1000,
+    "max_grad_norm": 1.0,
+    "train_subset_size": 50000,
+    "val_subset_size": 5000,
+    "test_subset_size": 1000,
+    "min_length": 5,
+    "max_length": 64
+  },
+  "train_losses": [
+    5.828943573810775,
+    4.540388213467003,
+    4.198462250594214,
+    4.000982693808245,
+    3.866461406361195
+  ],
+  "val_losses": [
+    6.908258605789352,
+    6.474614531129271,
+    6.28745988699106,
+    6.183522544064364,
+    6.090038378160078
+  ],
+  "learning_rates": [
+    0.003161771817141842,
+    0.002235710292465509,
+    0.0018254498097430146,
+    0.001580885908570921,
+    0.0014139873424944386
+  ],
+  "timestamp": "20260125_120756",
+  "bleu": 0.021886776118423382,
+  "bleu_precisions": [
+    0.21710526315789475,
+    0.04165483962531933,
+    0.009635186819652839,
+    0.002633487271478188
+  ],
+  "sample_translations": [
+    {
+      "source": "28-j\u00e4hriger Koch in San Francisco Mall tot aufgefunden",
+      "reference": "28-Year-Old Chef Found Dead at San Francisco Mall",
+      "prediction": "The Social Minister has been held in the Middle East-southis-southis."
+    },
+    {
+      "source": "Ein 28-j\u00e4hriger Koch, der vor kurzem nach San Francisco gezogen ist, wurde im Treppenhaus eines \u00f6rtlichen Einkaufzentrums tot aufgefunden.",
+      "reference": "A 28-year-old chef who had recently moved to San Francisco was found dead in the stairwell of a local mall this week.",
+      "prediction": "A number of 28, the former Minister was recently recently recently recently in the former Minister, the European Investment Bank has been held in a special community."
+    },
+    {
+      "source": "Der Bruder des Opfers sagte aus, dass er sich niemanden vorstellen kann, der ihm schaden wollen w\u00fcrde, Endlich ging es bei ihm wieder bergauf.",
+      "reference": "But the victims brother says he cant think of anyone who would want to hurt him, saying, Things were finally going well for him.",
+      "prediction": "The former Minister said that he has been able to be able to see the fact that he could be able to be able to be able to be able to be able to keep it."
+    },
+    {
+      "source": "Der am Mittwoch morgen in der Westfield Mall gefundene Leichnam wurde als der 28 Jahre alte Frank Galicia aus San Francisco identifiziert, teilte die gerichtsmedizinische Abteilung in San Francisco mit.",
+      "reference": "The body found at the Westfield Mall Wednesday morning was identified as 28-year-old San Francisco resident Frank Galicia, the San Francisco Medical Examiners Office said.",
+      "prediction": "The vote will be taken in the end of the BSE and the old old old old old old-souths, as a number of years ago, which has been made in the former Minister of the former Minister."
+    },
+    {
+      "source": "Das San Francisco Police Department sagte, dass der Tod als Mord eingestuft wurde und die Ermittlungen am Laufen sind.",
+      "reference": "The San Francisco Police Department said the death was ruled a homicide and an investigation is ongoing.",
+      "prediction": "The former Minister said that the death of the war has been made as a serious risk of the Russian authorities."
+    },
+    {
+      "source": "Der Bruder des Opfers, Louis Galicia, teilte dem ABS Sender KGO in San Francisco mit, dass Frank, der fr\u00fcher als Koch in Boston gearbeitet hat, vor sechs Monaten seinen Traumjob als Koch im Sons & Daughters Restaurant in San Francisco ergattert hatte.",
+      "reference": "The victims brother, Louis Galicia, told ABC station KGO in San Francisco that Frank, previously a line cook in Boston, had landed his dream job as line chef at San Franciscos Sons & Daughters restaurant six months ago.",
+      "prediction": "The former Minister, the fact of the European Investment Bank, the former Minister, the former Minister, has been held in the former Minister, as a number of months ago, as a number of months ago, as a number of former Minister, he has been held in the past, and his colleague, as long"
+    },
+    {
+      "source": "Ein Sprecher des Sons & Daughters sagte, dass sie \u00fcber seinen Tod schockiert und am Boden zerst\u00f6rt seien.",
+      "reference": "A spokesperson for Sons & Daughters said they were shocked and devastated by his death.",
+      "prediction": "A former Minister said, the fact that it has been said that it has been destroyed and the war."
+    },
+    {
+      "source": "Wir sind ein kleines Team, das wie eine enge Familie arbeitet und wir werden ihn schmerzlich vermissen, sagte der Sprecher weiter.",
+      "reference": "We are a small team that operates like a close knit family and he will be dearly missed, the spokesperson said.",
+      "prediction": "We are a small small-sized and a small-sized and we are doing a great deal of the oil industry."
+    },
+    {
+      "source": "Unsere Gedanken und unser Beileid sind in dieser schweren Zeit bei Franks Familie und Freunden.",
+      "reference": "Our thoughts and condolences are with Franks family and friends at this difficult time.",
+      "prediction": "Our approach and our family is the right of the family and children."
+    },
+    {
+      "source": "Louis Galicia gab an, dass Frank zun\u00e4chst in Hostels lebte, aber dass, die Dinge f\u00fcr ihn endlich bergauf gingen.",
+      "reference": "Louis Galicia said Frank initially stayed in hostels, but recently, Things were finally going well for him.",
+      "prediction": "The former Minister has been able to be able to start by the fact that the armed forces, but the way of the issues of the past."
+    }
+  ]
+}

@@ -105,7 +105,7 @@ def plot_learning_rate(results: Dict, output_path: str):
         print("No learning rate data found")
         return
 
-    fig, ax = plt.subplots(figsize=(8, 4))
+    fig, ax = plt.subplots(figsize=(8, 5))
 
     epochs = list(range(1, len(results['learning_rates']) + 1))
     ax.plot(epochs, results['learning_rates'], 'o-', color='#3498db', markersize=8)
@@ -122,25 +122,120 @@ def plot_learning_rate(results: Dict, output_path: str):
     print(f"Saved: {output_path}")
 
 
-def plot_bleu_comparison(results_list: List[Dict], labels: List[str], output_path: str):
-    """Plot BLEU score comparison bar chart."""
+def plot_task_loss_comparison(task_results: Dict, task_name: str, output_path: str):
+    """Plot validation loss comparison for a single task."""
     fig, ax = plt.subplots(figsize=(8, 5))
 
-    bleu_scores = [r.get('bleu', 0) for r in results_list]
-    x = range(len(labels))
+    std_losses = task_results['standard']['val_losses']
+    gated_losses = task_results['gated']['val_losses']
+    epochs = list(range(1, len(std_losses) + 1))
 
-    bars = ax.bar(x, bleu_scores, color=['#3498db', '#9b59b6', '#2ecc71', '#e74c3c'][:len(labels)])
+    ax.plot(epochs, std_losses, 'o-', color=COLORS['standard'],
+            label='Standard Attention', markersize=6, linewidth=2)
+    ax.plot(epochs, gated_losses, 's-', color=COLORS['gated'],
+            label='Gated Attention', markersize=6, linewidth=2)
 
-    for bar, score in zip(bars, bleu_scores):
-        ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01,
-                f'{score:.4f}', ha='center', va='bottom', fontsize=10)
+    ax.set_xlabel('Epoch')
+    ax.set_ylabel('Validation Loss')
+    title = task_name.replace('_', ' ').title()
+    ax.set_title(f'{title} - Validation Loss')
+    ax.legend(loc='upper right')
+    ax.grid(True, alpha=0.3)
 
-    ax.set_xlabel('Model')
-    ax.set_ylabel('BLEU Score')
-    ax.set_title('BLEU Score Comparison')
+    plt.tight_layout()
+    plt.savefig(output_path)
+    plt.close()
+    print(f"Saved: {output_path}")
+
+
+def plot_task_accuracy_comparison(task_results: Dict, task_name: str, output_path: str):
+    """Plot accuracy comparison for a single task."""
+    fig, ax = plt.subplots(figsize=(8, 5))
+
+    std_acc = task_results['standard']['accuracy_history']
+    gated_acc = task_results['gated']['accuracy_history']
+    epochs = list(range(1, len(std_acc) + 1))
+
+    ax.plot(epochs, std_acc, 'o-', color=COLORS['standard'],
+            label='Standard Attention', markersize=6, linewidth=2)
+    ax.plot(epochs, gated_acc, 's-', color=COLORS['gated'],
+            label='Gated Attention', markersize=6, linewidth=2)
+
+    ax.set_xlabel('Epoch')
+    ax.set_ylabel('Accuracy')
+    title = task_name.replace('_', ' ').title()
+    ax.set_title(f'{title} - Accuracy')
+    ax.legend(loc='lower right')
+    ax.grid(True, alpha=0.3)
+    ax.set_ylim(0, 1)
+
+    plt.tight_layout()
+    plt.savefig(output_path)
+    plt.close()
+    print(f"Saved: {output_path}")
+
+
+def plot_task_gate_statistics(task_results: Dict, task_name: str, output_path: str):
+    """Plot gate statistics for a single task."""
+    gate_stats = task_results['gated'].get('gate_stats_history', [])
+    if not gate_stats:
+        print(f"No gate statistics for {task_name}")
+        return
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+
+    gate_means = [s['gate_mean'] for s in gate_stats]
+    gate_stds = [s['gate_std'] for s in gate_stats]
+    epochs = list(range(1, len(gate_means) + 1))
+
+    # Plot mean with std as shaded region
+    ax.plot(epochs, gate_means, 'o-', color=COLORS['gated'],
+            label='Gate Mean', markersize=6, linewidth=2)
+    ax.fill_between(epochs,
+                   [m - s for m, s in zip(gate_means, gate_stds)],
+                   [m + s for m, s in zip(gate_means, gate_stds)],
+                   alpha=0.2, color=COLORS['gated'], label='Gate Std')
+
+    ax.axhline(y=0.5, color='gray', linestyle='--', alpha=0.7, label='Neutral (0.5)')
+    ax.set_xlabel('Epoch')
+    ax.set_ylabel('Gate Activation')
+    title = task_name.replace('_', ' ').title()
+    ax.set_title(f'{title} - Gate Statistics')
+    ax.legend(loc='upper right')
+    ax.set_ylim(0, 1)
+    ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig(output_path)
+    plt.close()
+    print(f"Saved: {output_path}")
+
+
+def plot_task_final_comparison(task_results: Dict, task_name: str, output_path: str):
+    """Plot bar chart comparing final metrics for a single task."""
+    fig, ax = plt.subplots(figsize=(8, 5))
+
+    std_acc = task_results['standard']['accuracy_history'][-1]
+    gated_acc = task_results['gated']['accuracy_history'][-1]
+
+    x = np.arange(2)
+    width = 0.35
+
+    bars1 = ax.bar(x - width/2, [std_acc, task_results['standard']['val_losses'][-1]],
+                   width, label='Standard', color=COLORS['standard'], edgecolor='black', linewidth=1)
+    bars2 = ax.bar(x + width/2, [gated_acc, task_results['gated']['val_losses'][-1]],
+                   width, label='Gated', color=COLORS['gated'], edgecolor='black', linewidth=1)
+
+    ax.bar_label(bars1, fmt='%.3f', padding=3, fontsize=10)
+    ax.bar_label(bars2, fmt='%.3f', padding=3, fontsize=10)
+
+    ax.set_ylabel('Value')
+    title = task_name.replace('_', ' ').title()
+    ax.set_title(f'{title} - Final Metrics Comparison')
     ax.set_xticks(x)
-    ax.set_xticklabels(labels)
-    ax.set_ylim(0, max(bleu_scores) * 1.2 if bleu_scores else 1)
+    ax.set_xticklabels(['Accuracy', 'Val Loss'])
+    ax.legend(loc='upper right')
+    ax.grid(True, alpha=0.3, axis='y')
 
     plt.tight_layout()
     plt.savefig(output_path)
@@ -192,139 +287,32 @@ def plot_task_dual_axis(task_results: Dict, task_name: str, output_path: str):
     print(f"Saved: {output_path}")
 
 
-def plot_gated_attention_comparison(results: Dict, output_path: str):
-    """Plot comparison of standard vs gated attention from experiments."""
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-
-    for idx, (task_name, task_results) in enumerate(results.items()):
-        ax = axes[idx]
-
-        std_losses = task_results['standard']['val_losses']
-        gated_losses = task_results['gated']['val_losses']
-        epochs = list(range(1, len(std_losses) + 1))
-
-        ax.plot(epochs, std_losses, 'o-', color=COLORS['standard'],
-                label='Standard Attention', markersize=6)
-        ax.plot(epochs, gated_losses, 's-', color=COLORS['gated'],
-                label='Gated Attention', markersize=6)
-
-        ax.set_xlabel('Epoch')
-        ax.set_ylabel('Validation Loss')
-        ax.set_title(task_name.replace('_', ' ').title())
-        ax.legend(loc='upper right')
-        ax.grid(True, alpha=0.3)
-
-    plt.tight_layout()
-    plt.savefig(output_path)
-    plt.close()
-    print(f"Saved: {output_path}")
-
-
-def plot_gated_accuracy_comparison(results: Dict, output_path: str):
-    """Plot accuracy comparison for gated attention experiments."""
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-
-    for idx, (task_name, task_results) in enumerate(results.items()):
-        ax = axes[idx]
-
-        std_acc = task_results['standard']['accuracy_history']
-        gated_acc = task_results['gated']['accuracy_history']
-        epochs = list(range(1, len(std_acc) + 1))
-
-        ax.plot(epochs, std_acc, 'o-', color=COLORS['standard'],
-                label='Standard Attention', markersize=6)
-        ax.plot(epochs, gated_acc, 's-', color=COLORS['gated'],
-                label='Gated Attention', markersize=6)
-
-        ax.set_xlabel('Epoch')
-        ax.set_ylabel('Accuracy')
-        ax.set_title(f'{task_name.replace("_", " ").title()} - Accuracy')
-        ax.legend(loc='lower right')
-        ax.grid(True, alpha=0.3)
-        ax.set_ylim(0, 1)
-
-    plt.tight_layout()
-    plt.savefig(output_path)
-    plt.close()
-    print(f"Saved: {output_path}")
-
-
-def plot_gate_statistics(results: Dict, output_path: str):
-    """Plot gate statistics over training for gated attention."""
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-
-    for idx, (task_name, task_results) in enumerate(results.items()):
-        ax = axes[idx]
-        gate_stats = task_results['gated'].get('gate_stats_history', [])
-
-        if gate_stats:
-            gate_means = [s['gate_mean'] for s in gate_stats]
-            gate_stds = [s['gate_std'] for s in gate_stats]
-            epochs = list(range(1, len(gate_means) + 1))
-
-            # Plot mean with std as shaded region
-            ax.plot(epochs, gate_means, 'o-', color=COLORS['gated'],
-                    label='Gate Mean', markersize=6, linewidth=2)
-            ax.fill_between(epochs,
-                           [m - s for m, s in zip(gate_means, gate_stds)],
-                           [m + s for m, s in zip(gate_means, gate_stds)],
-                           alpha=0.2, color=COLORS['gated'], label='Gate Std')
-
-            ax.axhline(y=0.5, color='gray', linestyle='--', alpha=0.7, label='Neutral (0.5)')
-            ax.set_xlabel('Epoch')
-            ax.set_ylabel('Gate Activation')
-            ax.set_title(f'{task_name.replace("_", " ").title()} - Gate Statistics')
-            ax.legend(loc='upper right')
-            ax.set_ylim(0, 1)
-            ax.grid(True, alpha=0.3)
-
-    plt.tight_layout()
-    plt.savefig(output_path)
-    plt.close()
-    print(f"Saved: {output_path}")
-
-
-def plot_final_comparison_bars(results: Dict, output_path: str):
-    """Plot bar chart comparing final accuracy between models."""
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+def plot_combined_accuracy_comparison(results: Dict, output_path: str):
+    """Plot accuracy comparison across all tasks in one figure."""
+    fig, ax = plt.subplots(figsize=(10, 6))
 
     task_names = list(results.keys())
-    x = np.arange(2)
+    x = np.arange(len(task_names))
     width = 0.35
 
-    for idx, task_name in enumerate(task_names):
-        ax = axes[idx]
-        task_results = results[task_name]
+    std_accs = [results[t]['standard']['accuracy_history'][-1] for t in task_names]
+    gated_accs = [results[t]['gated']['accuracy_history'][-1] for t in task_names]
 
-        std_acc = task_results['standard']['accuracy_history'][-1]
-        gated_acc = task_results['gated']['accuracy_history'][-1]
-        std_loss = task_results['standard']['val_losses'][-1]
-        gated_loss = task_results['gated']['val_losses'][-1]
+    bars1 = ax.bar(x - width/2, std_accs, width, label='Standard Attention',
+                   color=COLORS['standard'], edgecolor='black', linewidth=1)
+    bars2 = ax.bar(x + width/2, gated_accs, width, label='Gated Attention',
+                   color=COLORS['gated'], edgecolor='black', linewidth=1)
 
-        # Accuracy bars
-        bars1 = ax.bar(x[0] - width/2, std_acc, width, label='Standard',
-                       color=COLORS['standard'], edgecolor='black', linewidth=1)
-        bars2 = ax.bar(x[0] + width/2, gated_acc, width, label='Gated',
-                       color=COLORS['gated'], edgecolor='black', linewidth=1)
+    ax.bar_label(bars1, fmt='%.2f', padding=3, fontsize=10)
+    ax.bar_label(bars2, fmt='%.2f', padding=3, fontsize=10)
 
-        # Add value labels
-        ax.bar_label(bars1, fmt='%.2f', padding=3, fontsize=10)
-        ax.bar_label(bars2, fmt='%.2f', padding=3, fontsize=10)
-
-        # Loss bars on secondary position
-        bars3 = ax.bar(x[1] - width/2, std_loss, width,
-                       color=COLORS['standard'], alpha=0.5, edgecolor='black', linewidth=1)
-        bars4 = ax.bar(x[1] + width/2, gated_loss, width,
-                       color=COLORS['gated'], alpha=0.5, edgecolor='black', linewidth=1)
-        ax.bar_label(bars3, fmt='%.2f', padding=3, fontsize=10)
-        ax.bar_label(bars4, fmt='%.2f', padding=3, fontsize=10)
-
-        ax.set_ylabel('Value')
-        ax.set_title(f'{task_name.replace("_", " ").title()}', fontsize=13, fontweight='bold')
-        ax.set_xticks(x)
-        ax.set_xticklabels(['Final Accuracy', 'Final Val Loss'])
-        ax.legend(loc='upper right')
-        ax.grid(True, alpha=0.3, axis='y')
+    ax.set_ylabel('Final Accuracy')
+    ax.set_title('Standard vs Gated Attention: Final Accuracy Comparison')
+    ax.set_xticks(x)
+    ax.set_xticklabels([t.replace('_', ' ').title() for t in task_names])
+    ax.legend(loc='upper left')
+    ax.set_ylim(0, 1.1)
+    ax.grid(True, alpha=0.3, axis='y')
 
     plt.tight_layout()
     plt.savefig(output_path)
@@ -339,13 +327,13 @@ def plot_combined_summary(wmt_results: Optional[Dict], gated_results: Optional[D
     if wmt_results:
         n_plots += 1
     if gated_results:
-        n_plots += 2
+        n_plots += 1  # Just one plot for combined accuracy
 
     if n_plots == 0:
         print("No results to plot")
         return
 
-    fig, axes = plt.subplots(1, n_plots, figsize=(6 * n_plots, 5))
+    fig, axes = plt.subplots(1, n_plots, figsize=(7 * n_plots, 5))
     if n_plots == 1:
         axes = [axes]
 
@@ -366,38 +354,31 @@ def plot_combined_summary(wmt_results: Optional[Dict], gated_results: Optional[D
         ax.grid(True, alpha=0.3)
         plot_idx += 1
 
-    # Gated attention comparison
+    # Combined accuracy comparison
     if gated_results:
-        if 'copy_task' in gated_results:
-            ax = axes[plot_idx]
-            std_acc = gated_results['copy_task']['standard']['accuracy_history']
-            gated_acc = gated_results['copy_task']['gated']['accuracy_history']
-            epochs = list(range(1, len(std_acc) + 1))
-            ax.plot(epochs, std_acc, 'o-', color=COLORS['standard'],
-                    label='Standard', markersize=6)
-            ax.plot(epochs, gated_acc, 's-', color=COLORS['gated'],
-                    label='Gated', markersize=6)
-            ax.set_xlabel('Epoch')
-            ax.set_ylabel('Accuracy')
-            ax.set_title('Copy Task')
-            ax.legend()
-            ax.grid(True, alpha=0.3)
-            plot_idx += 1
+        ax = axes[plot_idx]
+        task_names = list(gated_results.keys())
+        x = np.arange(len(task_names))
+        width = 0.35
 
-        if 'associative_recall' in gated_results:
-            ax = axes[plot_idx]
-            std_acc = gated_results['associative_recall']['standard']['accuracy_history']
-            gated_acc = gated_results['associative_recall']['gated']['accuracy_history']
-            epochs = list(range(1, len(std_acc) + 1))
-            ax.plot(epochs, std_acc, 'o-', color=COLORS['standard'],
-                    label='Standard', markersize=6)
-            ax.plot(epochs, gated_acc, 's-', color=COLORS['gated'],
-                    label='Gated', markersize=6)
-            ax.set_xlabel('Epoch')
-            ax.set_ylabel('Accuracy')
-            ax.set_title('Associative Recall')
-            ax.legend()
-            ax.grid(True, alpha=0.3)
+        std_accs = [gated_results[t]['standard']['accuracy_history'][-1] for t in task_names]
+        gated_accs = [gated_results[t]['gated']['accuracy_history'][-1] for t in task_names]
+
+        bars1 = ax.bar(x - width/2, std_accs, width, label='Standard',
+                       color=COLORS['standard'], edgecolor='black', linewidth=1)
+        bars2 = ax.bar(x + width/2, gated_accs, width, label='Gated',
+                       color=COLORS['gated'], edgecolor='black', linewidth=1)
+
+        ax.bar_label(bars1, fmt='%.2f', padding=3, fontsize=9)
+        ax.bar_label(bars2, fmt='%.2f', padding=3, fontsize=9)
+
+        ax.set_ylabel('Accuracy')
+        ax.set_title('Gated Attention: Final Accuracy')
+        ax.set_xticks(x)
+        ax.set_xticklabels([t.replace('_', ' ').title() for t in task_names], fontsize=9)
+        ax.legend()
+        ax.set_ylim(0, 1.1)
+        ax.grid(True, alpha=0.3, axis='y')
 
     plt.tight_layout()
     plt.savefig(output_path)
@@ -447,20 +428,35 @@ def generate_results_table(results: Dict, output_dir: str):
 
     for row in rows:
         epochs_str = str(row['epochs_90']) if row['epochs_90'] else '-'
+        # Bold the better accuracy in each task
         acc_str = f"**{row['accuracy']:.1f}%**" if row['model'] == 'Gated' and row['accuracy'] > 70 else f"{row['accuracy']:.1f}%"
         md_lines.append(
             f"| {row['task']} | {row['model']} | {acc_str} | {row['loss']:.3f} | {epochs_str} | {row['loss_rate']:.4f} |"
         )
 
+    # Find accuracy differences
+    task_diffs = {}
+    for i in range(0, len(rows), 2):
+        task = rows[i]['task']
+        std_acc = rows[i]['accuracy']
+        gated_acc = rows[i+1]['accuracy']
+        task_diffs[task] = gated_acc - std_acc
+
     md_lines.extend([
         "",
         "## Key Findings",
-        "",
-        "- **Copy Task**: Gated attention achieves significantly higher accuracy (94.2% vs 69.6%)",
-        "- **Associative Recall**: Both models perform similarly (~52-53%), suggesting task complexity",
-        "- Gate activations stabilize around 0.53 for copy task, indicating learned selective attention",
         ""
     ])
+
+    for task, diff in task_diffs.items():
+        if diff > 5:
+            md_lines.append(f"- **{task}**: Gated attention achieves significantly higher accuracy (+{diff:.1f}%)")
+        elif diff > 0:
+            md_lines.append(f"- **{task}**: Gated attention shows slight improvement (+{diff:.1f}%)")
+        else:
+            md_lines.append(f"- **{task}**: Both models perform similarly")
+
+    md_lines.append("")
 
     md_path = os.path.join(output_dir, 'gated_attention_results.md')
     with open(md_path, 'w') as f:
@@ -566,23 +562,31 @@ def main():
                 gated_results = json.load(f)
             print(f"Loaded gated attention results")
 
-            # Generate gated attention figures
-            plot_gated_attention_comparison(gated_results,
-                os.path.join(output_dir, 'gated_attention_loss.png'))
+            # Generate individual plots for each task
+            for task_name, task_results in gated_results.items():
+                # Loss comparison
+                plot_task_loss_comparison(task_results, task_name,
+                    os.path.join(output_dir, f'{task_name}_loss.png'))
 
-            plot_gated_accuracy_comparison(gated_results,
-                os.path.join(output_dir, 'gated_attention_accuracy.png'))
+                # Accuracy comparison
+                plot_task_accuracy_comparison(task_results, task_name,
+                    os.path.join(output_dir, f'{task_name}_accuracy.png'))
 
-            plot_gate_statistics(gated_results,
-                os.path.join(output_dir, 'gate_statistics.png'))
+                # Gate statistics
+                plot_task_gate_statistics(task_results, task_name,
+                    os.path.join(output_dir, f'{task_name}_gate_stats.png'))
 
-            plot_final_comparison_bars(gated_results,
-                os.path.join(output_dir, 'gated_final_comparison.png'))
+                # Final metrics bar chart
+                plot_task_final_comparison(task_results, task_name,
+                    os.path.join(output_dir, f'{task_name}_final_comparison.png'))
 
-            # Generate per-task dual-axis plots
-            for task_name in gated_results.keys():
-                plot_task_dual_axis(gated_results[task_name], task_name,
-                    os.path.join(output_dir, f'gated_{task_name}_detailed.png'))
+                # Dual-axis detailed plot
+                plot_task_dual_axis(task_results, task_name,
+                    os.path.join(output_dir, f'{task_name}_detailed.png'))
+
+            # Combined accuracy comparison across tasks
+            plot_combined_accuracy_comparison(gated_results,
+                os.path.join(output_dir, 'combined_accuracy_comparison.png'))
 
             # Generate results tables
             generate_results_table(gated_results, tables_dir)
