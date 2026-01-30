@@ -7,7 +7,7 @@ from torch.utils.data import Dataset
 
 
 # Character whitelist from practical specification
-WHITELIST = "abcdefghijklmnopqrstuvwxyz ÄÖÜäöüß ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.,!?()[]{}:;-&$@#%£€/\\|_+*¥"
+WHITELIST = "abcdefghijklmnopqrstuvwxyz ÄÖÜäöüß ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.,!?()[]{}:;-&$@#%£€/\\|_+*¥'\""
 
 # Special tokens
 PAD_TOKEN = "[PAD]"
