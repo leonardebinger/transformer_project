@@ -29,28 +29,28 @@ from dataset import clean_text, is_valid_pair, PAD_TOKEN, BOS_TOKEN, EOS_TOKEN
 
 # Configuration
 CONFIG = {
-    # Model
+    # Model - "Base" configuration from "Attention Is All You Need"
     'vocab_size': 50000,
-    'd_model': 64,
-    'n_heads': 4,
-    'num_encoder_layers': 2,
-    'num_decoder_layers': 2,
-    'dim_feedforward': 128,
+    'd_model': 512,
+    'n_heads': 8,
+    'num_encoder_layers': 6,
+    'num_decoder_layers': 6,
+    'dim_feedforward': 2048,
     'dropout': 0.1,
-    'max_len': 64,
+    'max_len': 128,
 
-    # Training
-    'batch_size': 32,
+    # Training - optimized for A100 80GB
+    'batch_size': 128,
     'num_epochs': 5,
-    'warmup_steps': 1000,
+    'warmup_steps': 4000,
     'max_grad_norm': 1.0,
 
-    # Data
-    'train_subset_size': 50000,  # Use subset for faster training
-    'val_subset_size': 5000,
-    'test_subset_size': 1000,
+    # Data - use full WMT17 dataset
+    'train_subset_size': None,  # None = use full dataset
+    'val_subset_size': 10000,
+    'test_subset_size': 3000,
     'min_length': 5,
-    'max_length': 64,
+    'max_length': 128,
 }
 
 
@@ -136,11 +136,12 @@ def load_and_clean_wmt17(split: str, max_samples: int = None) -> List[Tuple[str,
     return cleaned
 
 
-def train_epoch(model, dataloader, optimizer, scheduler, criterion, device, epoch, num_epochs):
-    """Train for one epoch."""
+def train_epoch(model, dataloader, optimizer, scheduler, criterion, device, epoch, num_epochs, scaler=None):
+    """Train for one epoch with optional mixed precision."""
     model.train()
     total_loss = 0
     num_batches = 0
+    use_amp = scaler is not None
 
     progress = tqdm.tqdm(dataloader, desc=f"Epoch {epoch+1}/{num_epochs}")
     for batch in progress:
@@ -154,16 +155,28 @@ def train_epoch(model, dataloader, optimizer, scheduler, criterion, device, epoc
         tgt_mask_input = tgt_mask[:, :-1]
 
         optimizer.zero_grad()
-        logits = model(src, tgt_input, src_mask, tgt_mask_input)
 
-        logits = logits.reshape(-1, logits.size(-1))
-        tgt_output = tgt_output.reshape(-1)
+        if use_amp:
+            with torch.cuda.amp.autocast():
+                logits = model(src, tgt_input, src_mask, tgt_mask_input)
+                logits = logits.reshape(-1, logits.size(-1))
+                tgt_output_flat = tgt_output.reshape(-1)
+                loss = criterion(logits, tgt_output_flat)
 
-        loss = criterion(logits, tgt_output)
-        loss.backward()
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), CONFIG['max_grad_norm'])
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            logits = model(src, tgt_input, src_mask, tgt_mask_input)
+            logits = logits.reshape(-1, logits.size(-1))
+            tgt_output = tgt_output.reshape(-1)
+            loss = criterion(logits, tgt_output)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), CONFIG['max_grad_norm'])
+            optimizer.step()
 
-        torch.nn.utils.clip_grad_norm_(model.parameters(), CONFIG['max_grad_norm'])
-        optimizer.step()
         scheduler.step()
 
         total_loss += loss.item()
@@ -277,11 +290,15 @@ def main():
     pad_idx = tokenizer.pad_idx
     train_loader = DataLoader(
         train_dataset, batch_size=CONFIG['batch_size'], shuffle=True,
-        collate_fn=lambda b: collate_fn(b, pad_idx)
+        collate_fn=lambda b: collate_fn(b, pad_idx),
+        num_workers=4,
+        pin_memory=True
     )
     val_loader = DataLoader(
         val_dataset, batch_size=CONFIG['batch_size'], shuffle=False,
-        collate_fn=lambda b: collate_fn(b, pad_idx)
+        collate_fn=lambda b: collate_fn(b, pad_idx),
+        num_workers=4,
+        pin_memory=True
     )
 
     # Initialize model
@@ -314,6 +331,11 @@ def main():
     print("Training")
     print("="*60)
 
+    # Initialize mixed precision scaler for CUDA
+    scaler = torch.cuda.amp.GradScaler() if device.type == 'cuda' else None
+    if scaler:
+        print("Using mixed precision training (AMP)")
+
     results = {
         'config': CONFIG,
         'train_losses': [],
@@ -324,7 +346,7 @@ def main():
 
     for epoch in range(CONFIG['num_epochs']):
         train_loss = train_epoch(model, train_loader, optimizer, scheduler,
-                                  criterion, device, epoch, CONFIG['num_epochs'])
+                                  criterion, device, epoch, CONFIG['num_epochs'], scaler)
         val_loss = evaluate(model, val_loader, criterion, device)
 
         results['train_losses'].append(train_loss)
