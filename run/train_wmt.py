@@ -69,8 +69,8 @@ class WMTDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         src, tgt = self.data[idx]
 
-        # Encode with BPE tokenizer (adds BOS/EOS)
-        src_ids = self.tokenizer.encode(src, add_special_tokens=False)
+        # Encode with BPE tokenizer (adds BOS/EOS for both source and target)
+        src_ids = self.tokenizer.encode(src, add_special_tokens=True)
         tgt_ids = self.tokenizer.encode(tgt, add_special_tokens=True)
 
         # Truncate
@@ -221,8 +221,8 @@ def generate_translations(model, test_data, tokenizer, device, max_samples=100):
     references = []
 
     for src_text, tgt_text in tqdm.tqdm(test_data[:max_samples], desc="Generating"):
-        # Encode source and truncate to max_len
-        src_ids = tokenizer.encode(src_text, add_special_tokens=False)
+        # Encode source with special tokens and truncate to max_len
+        src_ids = tokenizer.encode(src_text, add_special_tokens=True)
         src_ids = src_ids[:CONFIG['max_len']]  # Truncate to avoid exceeding positional encoding
         src = torch.tensor([src_ids], dtype=torch.long, device=device)
         src_mask = torch.ones(1, len(src_ids), device=device)

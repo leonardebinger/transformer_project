@@ -68,7 +68,7 @@ def generate_translations(model, test_data, tokenizer, device, max_len, max_samp
     sources = []
 
     for src_text, tgt_text in tqdm.tqdm(test_data[:max_samples], desc="Generating"):
-        src_ids = tokenizer.encode(src_text, add_special_tokens=False)
+        src_ids = tokenizer.encode(src_text, add_special_tokens=True)
         src_ids = src_ids[:max_len]
         src = torch.tensor([src_ids], dtype=torch.long, device=device)
         src_mask = torch.ones(1, len(src_ids), device=device)
