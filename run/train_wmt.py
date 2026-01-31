@@ -214,6 +214,64 @@ def evaluate(model, dataloader, criterion, device):
     return total_loss / num_batches
 
 
+SAMPLE_SENTENCES = [
+    "Ich liebe dich.",
+    "Wo ist der Bahnhof?",
+    "Das Wetter ist heute schön.",
+    "Ich möchte ein Bier bestellen.",
+    "Wie viel kostet das?",
+]
+
+
+def translate_sentence(model, sentence, tokenizer, device, max_len=128):
+    """Translate a single sentence."""
+    model.eval()
+    with torch.no_grad():
+        src_ids = tokenizer.encode(sentence, add_special_tokens=True)
+        src_ids = src_ids[:max_len]
+        src = torch.tensor([src_ids], dtype=torch.long, device=device)
+        src_mask = torch.ones(1, len(src_ids), device=device)
+
+        output_ids = greedy_decode(
+            model, src, src_mask,
+            bos_idx=tokenizer.bos_idx,
+            eos_idx=tokenizer.eos_idx,
+            max_len=max_len,
+            device=device
+        )
+
+        output_ids = output_ids[0].tolist()
+        if tokenizer.bos_idx in output_ids:
+            output_ids = output_ids[output_ids.index(tokenizer.bos_idx) + 1:]
+        if tokenizer.eos_idx in output_ids:
+            output_ids = output_ids[:output_ids.index(tokenizer.eos_idx)]
+
+        return tokenizer.decode(output_ids, skip_special_tokens=True)
+
+
+def print_sample_translations(model, test_data, tokenizer, device, epoch):
+    """Print sample translations after each epoch."""
+    print(f"\n  Sample Translations (Epoch {epoch+1}):")
+    print("  " + "-"*50)
+
+    # 10 sentences from test set
+    print("  From test set:")
+    for i in range(min(10, len(test_data))):
+        src, ref = test_data[i]
+        pred = translate_sentence(model, src, tokenizer, device)
+        print(f"    DE: {src[:60]}...")
+        print(f"    EN: {pred[:60]}...")
+        print()
+
+    # 5 hardcoded sentences
+    print("  Common phrases:")
+    for src in SAMPLE_SENTENCES:
+        pred = translate_sentence(model, src, tokenizer, device)
+        print(f"    DE: {src}")
+        print(f"    EN: {pred}")
+        print()
+
+
 def generate_translations(model, test_data, tokenizer, device, max_samples=100):
     """Generate translations for test data."""
     model.eval()
@@ -356,6 +414,9 @@ def main():
         print(f"Epoch {epoch+1}/{CONFIG['num_epochs']} - "
               f"Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, "
               f"LR: {scheduler.get_lr():.6f}")
+
+        # Sample translations after each epoch
+        print_sample_translations(model, test_data, tokenizer, device, epoch)
 
     # Training summary
     print("\n" + "="*60)
