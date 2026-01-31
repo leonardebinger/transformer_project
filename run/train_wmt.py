@@ -39,11 +39,13 @@ CONFIG = {
     'dropout': 0.1,
     'max_len': 128,
 
-    # Training - optimized for A100 80GB
+    # Training - following "Attention Is All You Need" paper, optimized for A100 40GB
     'batch_size': 128,
+    'gradient_accumulation': 4,    # Effective batch = 128*4 = 512 sentences (~15k tokens)
     'num_epochs': 5,
     'warmup_steps': 4000,
     'max_grad_norm': 1.0,
+    'label_smoothing': 0.1,        # Paper uses 0.1 - crucial for translation quality
 
     # Data - use full WMT17 dataset
     'train_subset_size': None,  # None = use full dataset
@@ -137,14 +139,17 @@ def load_and_clean_wmt17(split: str, max_samples: int = None) -> List[Tuple[str,
 
 
 def train_epoch(model, dataloader, optimizer, scheduler, criterion, device, epoch, num_epochs, scaler=None):
-    """Train for one epoch with optional mixed precision."""
+    """Train for one epoch with gradient accumulation and optional mixed precision."""
     model.train()
     total_loss = 0
     num_batches = 0
     use_amp = scaler is not None
+    accum_steps = CONFIG['gradient_accumulation']
 
+    optimizer.zero_grad()
     progress = tqdm.tqdm(dataloader, desc=f"Epoch {epoch+1}/{num_epochs}")
-    for batch in progress:
+
+    for batch_idx, batch in enumerate(progress):
         src = batch['src'].to(device)
         tgt = batch['tgt'].to(device)
         src_mask = batch['src_mask'].to(device)
@@ -154,34 +159,38 @@ def train_epoch(model, dataloader, optimizer, scheduler, criterion, device, epoc
         tgt_output = tgt[:, 1:]
         tgt_mask_input = tgt_mask[:, :-1]
 
-        optimizer.zero_grad()
-
         if use_amp:
             with torch.cuda.amp.autocast():
                 logits = model(src, tgt_input, src_mask, tgt_mask_input)
                 logits = logits.reshape(-1, logits.size(-1))
                 tgt_output_flat = tgt_output.reshape(-1)
-                loss = criterion(logits, tgt_output_flat)
+                loss = criterion(logits, tgt_output_flat) / accum_steps
 
             scaler.scale(loss).backward()
-            scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), CONFIG['max_grad_norm'])
-            scaler.step(optimizer)
-            scaler.update()
+
+            if (batch_idx + 1) % accum_steps == 0:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), CONFIG['max_grad_norm'])
+                scaler.step(optimizer)
+                scaler.update()
+                optimizer.zero_grad()
+                scheduler.step()
         else:
             logits = model(src, tgt_input, src_mask, tgt_mask_input)
             logits = logits.reshape(-1, logits.size(-1))
-            tgt_output = tgt_output.reshape(-1)
-            loss = criterion(logits, tgt_output)
+            tgt_output_flat = tgt_output.reshape(-1)
+            loss = criterion(logits, tgt_output_flat) / accum_steps
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), CONFIG['max_grad_norm'])
-            optimizer.step()
 
-        scheduler.step()
+            if (batch_idx + 1) % accum_steps == 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), CONFIG['max_grad_norm'])
+                optimizer.step()
+                optimizer.zero_grad()
+                scheduler.step()
 
-        total_loss += loss.item()
+        total_loss += loss.item() * accum_steps  # Unscale for logging
         num_batches += 1
-        progress.set_postfix({'loss': loss.item(), 'lr': scheduler.get_lr()})
+        progress.set_postfix({'loss': loss.item() * accum_steps, 'lr': scheduler.get_lr()})
 
     return total_loss / num_batches
 
@@ -382,7 +391,7 @@ def main():
     optimizer = get_optimizer(model, lr=1e-4, weight_decay=0.01)
     scheduler = TransformerLRScheduler(optimizer, d_model=CONFIG['d_model'],
                                         warmup_steps=CONFIG['warmup_steps'])
-    criterion = nn.CrossEntropyLoss(ignore_index=pad_idx)
+    criterion = nn.CrossEntropyLoss(ignore_index=pad_idx, label_smoothing=CONFIG['label_smoothing'])
 
     # Training
     print("\n" + "="*60)
