@@ -248,7 +248,18 @@ class HuggingFaceBPETokenizer:
 
     @classmethod
     def load(cls, save_dir: str) -> 'HuggingFaceBPETokenizer':
-        """Load tokenizer from directory."""
+        """Load tokenizer from directory using from_pretrained."""
         instance = cls()
-        instance.tokenizer = GPT2Tokenizer.from_pretrained(save_dir)
+        # Monkeypatch to bypass repo ID validation for local paths
+        import huggingface_hub.utils._validators as hf_validators
+        original_validate = hf_validators.validate_repo_id
+        def patched_validate(repo_id):
+            if os.path.exists(repo_id):
+                return  # Skip validation for local paths
+            return original_validate(repo_id)
+        hf_validators.validate_repo_id = patched_validate
+        try:
+            instance.tokenizer = GPT2Tokenizer.from_pretrained(save_dir)
+        finally:
+            hf_validators.validate_repo_id = original_validate
         return instance

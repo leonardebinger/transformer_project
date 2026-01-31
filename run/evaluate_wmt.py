@@ -28,15 +28,16 @@ from datasets import load_dataset
 
 
 CONFIG = {
-    'd_model': 64,
-    'n_heads': 4,
-    'num_encoder_layers': 2,
-    'num_decoder_layers': 2,
-    'dim_feedforward': 128,
+    # Model - "Base" configuration from "Attention Is All You Need"
+    'd_model': 512,
+    'n_heads': 8,
+    'num_encoder_layers': 6,
+    'num_decoder_layers': 6,
+    'dim_feedforward': 2048,
     'dropout': 0.1,
-    'max_len': 64,
+    'max_len': 128,
     'min_length': 5,
-    'max_length': 64,
+    'max_length': 128,
 }
 
 
