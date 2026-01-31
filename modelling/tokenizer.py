@@ -9,7 +9,6 @@ from tokenizers.models import BPE
 from tokenizers.trainers import BpeTrainer
 from tokenizers.pre_tokenizers import ByteLevel
 from tokenizers.decoders import ByteLevel as ByteLevelDecoder
-from transformers import GPT2Tokenizer
 
 
 class BPETokenizer:
@@ -147,50 +146,28 @@ class HuggingFaceBPETokenizer:
 
     def _convert_to_gpt2_tokenizer(self, save_dir: Optional[str] = None):
         """Convert the trained BPE tokenizer to GPT2Tokenizer format."""
+        from transformers import PreTrainedTokenizerFast
+
         if save_dir is None:
             save_dir = tempfile.mkdtemp()
 
-        # Get vocabulary and merges from the trained tokenizer
-        vocab = self._base_tokenizer.get_vocab()
+        os.makedirs(save_dir, exist_ok=True)
 
-        # Save vocab.json
-        vocab_file = os.path.join(save_dir, "vocab.json")
-        with open(vocab_file, 'w', encoding='utf-8') as f:
-            json.dump(vocab, f, ensure_ascii=False)
+        # Save the base tokenizer to a JSON file
+        tokenizer_json_path = os.path.join(save_dir, "tokenizer.json")
+        self._base_tokenizer.save(tokenizer_json_path)
 
-        # Get merges from the BPE model
-        tokenizer_json = self._base_tokenizer.to_str()
-        tokenizer_dict = json.loads(tokenizer_json)
-
-        merges = []
-        if 'model' in tokenizer_dict and 'merges' in tokenizer_dict['model']:
-            merges = tokenizer_dict['model']['merges']
-
-        # Save merges.txt
-        merges_file = os.path.join(save_dir, "merges.txt")
-        with open(merges_file, 'w', encoding='utf-8') as f:
-            f.write("#version: 0.2\n")
-            for merge in merges:
-                # Merges can be lists ["a", "b"] or strings "a b"
-                if isinstance(merge, list):
-                    f.write(" ".join(merge) + "\n")
-                else:
-                    f.write(merge + "\n")
-
-        # Create GPT2Tokenizer from saved files
-        self.tokenizer = GPT2Tokenizer(
-            vocab_file=vocab_file,
-            merges_file=merges_file,
+        # Create a PreTrainedTokenizerFast from the tokenizer.json
+        self.tokenizer = PreTrainedTokenizerFast(
+            tokenizer_file=tokenizer_json_path,
             unk_token="[UNK]",
             bos_token="[BOS]",
             eos_token="[EOS]",
             pad_token="[PAD]"
         )
 
-        self.tokenizer.pad_token_id = self.tokenizer.convert_tokens_to_ids("[PAD]")
-        self.tokenizer.bos_token_id = self.tokenizer.convert_tokens_to_ids("[BOS]")
-        self.tokenizer.eos_token_id = self.tokenizer.convert_tokens_to_ids("[EOS]")
-        self.tokenizer.unk_token_id = self.tokenizer.convert_tokens_to_ids("[UNK]")
+        # Save in the standard format for later loading
+        self.tokenizer.save_pretrained(save_dir)
 
     def encode(self, text: str, add_special_tokens: bool = True) -> List[int]:
         """Encode text to token IDs."""
@@ -249,7 +226,10 @@ class HuggingFaceBPETokenizer:
     @classmethod
     def load(cls, save_dir: str) -> 'HuggingFaceBPETokenizer':
         """Load tokenizer from directory using from_pretrained."""
+        from transformers import PreTrainedTokenizerFast
+
         instance = cls()
+
         # Monkeypatch to bypass repo ID validation for local paths
         import huggingface_hub.utils._validators as hf_validators
         original_validate = hf_validators.validate_repo_id
@@ -259,7 +239,7 @@ class HuggingFaceBPETokenizer:
             return original_validate(repo_id)
         hf_validators.validate_repo_id = patched_validate
         try:
-            instance.tokenizer = GPT2Tokenizer.from_pretrained(save_dir)
+            instance.tokenizer = PreTrainedTokenizerFast.from_pretrained(save_dir)
         finally:
             hf_validators.validate_repo_id = original_validate
         return instance
