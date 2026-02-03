@@ -214,11 +214,15 @@ def evaluate(
     """Evaluate model on validation set."""
     model.eval()
 
-    total_loss = 0
+    total_loss = 0.0
     total_tokens = 0
-    all_predictions = []
-    all_targets = []
-    all_masks = []
+
+    # Accumulate metrics incrementally instead of concatenating tensors
+    # (different batches may have different sequence lengths due to padding)
+    total_correct = 0
+    total_exact_match = 0
+    total_sequences = 0
+    total_leakage = 0
 
     for batch in dataloader:
         src = batch['src'].to(device)
@@ -237,23 +241,39 @@ def evaluate(
         # Compute loss
         loss_per_token = criterion(logits.transpose(1, 2), tgt_output)
         masked_loss = (loss_per_token * loss_mask_shifted.float()).sum()
+        batch_tokens = loss_mask_shifted.sum().item()
         total_loss += masked_loss.item()
-        total_tokens += loss_mask_shifted.sum().item()
+        total_tokens += batch_tokens
 
-        # Collect predictions for metrics
+        # Compute metrics for this batch
         predictions = logits.argmax(dim=-1)
-        all_predictions.append(predictions)
-        all_targets.append(tgt_output)
-        all_masks.append(loss_mask_shifted)
+
+        # Token accuracy
+        correct = ((predictions == tgt_output) & loss_mask_shifted).sum().item()
+        total_correct += correct
+
+        # Exact match (all tokens in sequence correct)
+        seq_correct = ((predictions == tgt_output) | ~loss_mask_shifted).all(dim=1)
+        total_exact_match += seq_correct.sum().item()
+        total_sequences += predictions.size(0)
+
+        # Leakage (for selective copy)
+        if distractor_tokens is not None:
+            in_distractor = torch.zeros_like(predictions, dtype=torch.bool)
+            for tok in distractor_tokens:
+                in_distractor |= (predictions == tok)
+            leakage = (in_distractor & loss_mask_shifted).sum().item()
+            total_leakage += leakage
 
     avg_loss = total_loss / total_tokens if total_tokens > 0 else 0
 
-    # Compute metrics
-    all_predictions = torch.cat(all_predictions, dim=0)
-    all_targets = torch.cat(all_targets, dim=0)
-    all_masks = torch.cat(all_masks, dim=0)
+    metrics = {
+        'token_accuracy': total_correct / total_tokens if total_tokens > 0 else 0.0,
+        'exact_match': total_exact_match / total_sequences if total_sequences > 0 else 0.0
+    }
 
-    metrics = compute_metrics(all_predictions, all_targets, all_masks, distractor_tokens)
+    if distractor_tokens is not None:
+        metrics['leakage_rate'] = total_leakage / total_tokens if total_tokens > 0 else 0.0
 
     return avg_loss, metrics
 
