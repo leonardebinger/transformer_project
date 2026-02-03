@@ -1,0 +1,10 @@
+torch
+numpy
+matplotlib
+datasets
+tokenizers
+transformers
+evaluate
+scikit-learn
+tqdm
+pytest
