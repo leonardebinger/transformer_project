@@ -6,6 +6,8 @@ to evaluate whether gated attention mechanisms:
 1. Allow the model to ignore irrelevant tokens more effectively
 2. Converge faster or achieve lower loss
 3. Show stable convergence behavior
+
+Runs multiple seeds and saves per-run results for mean/std analysis.
 """
 
 import sys
@@ -16,11 +18,25 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 import json
+import random
+import numpy as np
 from datetime import datetime
 
 from experiments.synthetic_tasks import CopyTaskDataset, AssociativeRecallDataset, collate_synthetic
 from experiments.gated_transformer import GatedTransformer
 from modelling.transformer import Transformer
+
+NUM_SEEDS = 10
+NUM_EPOCHS = 5
+
+
+def set_seed(seed):
+    """Set random seed for reproducibility."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 
 class ExperimentTracker:
@@ -184,8 +200,8 @@ def run_experiment(task_name, task_class, task_kwargs, model_configs,
     print(f"{'='*60}")
 
     # Create datasets
-    train_dataset = task_class(num_samples=1000, **task_kwargs)
-    val_dataset = task_class(num_samples=200, **task_kwargs)
+    train_dataset = task_class(num_samples=10000, **task_kwargs)
+    val_dataset = task_class(num_samples=2000, **task_kwargs)
 
     pad_idx = task_kwargs.get('pad_idx', 0)
     train_loader = DataLoader(
@@ -218,70 +234,43 @@ def run_experiment(task_name, task_class, task_kwargs, model_configs,
     return results
 
 
-def analyze_results(all_results):
-    """Analyze and print comparison of results."""
+def analyze_multi_seed_results(all_results):
+    """Analyze and print comparison of results across multiple seeds."""
     print("\n" + "="*60)
-    print("ANALYSIS")
+    print("ANALYSIS (aggregated across seeds)")
     print("="*60)
 
-    for task_name, task_results in all_results.items():
+    for task_name in ['copy_task', 'associative_recall']:
+        if task_name not in all_results:
+            continue
+        task_results = all_results[task_name]
         print(f"\n{task_name.upper().replace('_', ' ')}:")
         print("-" * 40)
 
-        std_metrics = task_results['standard']
-        gated_metrics = task_results['gated']
+        for model_type in ['standard', 'gated']:
+            runs = task_results[model_type]['runs']
+            final_accs = [r['accuracy_history'][-1] for r in runs]
+            final_losses = [r['val_losses'][-1] for r in runs]
 
-        # Final performance
-        std_final_loss = std_metrics['val_losses'][-1]
-        gated_final_loss = gated_metrics['val_losses'][-1]
-        std_final_acc = std_metrics['accuracy_history'][-1]
-        gated_final_acc = gated_metrics['accuracy_history'][-1]
+            mean_acc = np.mean(final_accs)
+            std_acc = np.std(final_accs)
+            mean_loss = np.mean(final_losses)
+            std_loss = np.std(final_losses)
 
-        print(f"  Final Val Loss:  Standard={std_final_loss:.4f}, Gated={gated_final_loss:.4f}")
-        print(f"  Final Accuracy:  Standard={std_final_acc:.4f}, Gated={gated_final_acc:.4f}")
+            print(f"  {model_type.title()}: Acc={mean_acc:.4f}±{std_acc:.4f}, "
+                  f"Loss={mean_loss:.4f}±{std_loss:.4f}")
 
-        # Convergence analysis (epochs to reach 90% of final accuracy)
-        def epochs_to_threshold(acc_history, threshold_pct=0.9):
-            if not acc_history:
-                return None
-            final_acc = acc_history[-1]
-            threshold = final_acc * threshold_pct
-            for i, acc in enumerate(acc_history):
-                if acc >= threshold:
-                    return i + 1
-            return len(acc_history)
-
-        std_conv = epochs_to_threshold(std_metrics['accuracy_history'])
-        gated_conv = epochs_to_threshold(gated_metrics['accuracy_history'])
-        print(f"  Epochs to 90%:   Standard={std_conv}, Gated={gated_conv}")
-
-        # Loss decrease rate (first 5 epochs)
-        def loss_decrease_rate(losses, n=5):
-            if len(losses) < 2:
-                return 0
-            n = min(n, len(losses))
-            return (losses[0] - losses[n-1]) / n
-
-        std_rate = loss_decrease_rate(std_metrics['train_losses'])
-        gated_rate = loss_decrease_rate(gated_metrics['train_losses'])
-        print(f"  Loss Decrease/Epoch (first 5): Standard={std_rate:.4f}, Gated={gated_rate:.4f}")
-
-        # Gate statistics
-        if gated_metrics['gate_stats_history']:
-            final_gate = gated_metrics['gate_stats_history'][-1]
-            first_gate = gated_metrics['gate_stats_history'][0]
-            print(f"  Gate Mean:       First={first_gate['gate_mean']:.3f}, Final={final_gate['gate_mean']:.3f}")
-
-        # Winner determination
-        loss_winner = "Gated" if gated_final_loss < std_final_loss else "Standard"
-        acc_winner = "Gated" if gated_final_acc > std_final_acc else "Standard"
-        print(f"  Better Loss:     {loss_winner}")
+        # Winner
+        std_accs = [r['accuracy_history'][-1] for r in task_results['standard']['runs']]
+        gated_accs = [r['accuracy_history'][-1] for r in task_results['gated']['runs']]
+        acc_winner = "Gated" if np.mean(gated_accs) > np.mean(std_accs) else "Standard"
         print(f"  Better Accuracy: {acc_winner}")
 
 
 def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
+    print(f"Running {NUM_SEEDS} seeds, {NUM_EPOCHS} epochs each")
 
     # Small model configuration
     vocab_size = 100
@@ -315,40 +304,64 @@ def main():
         }
     }
 
-    all_results = {}
-
-    # Copy task experiment
-    copy_results = run_experiment(
-        task_name="Copy Task",
-        task_class=CopyTaskDataset,
-        task_kwargs={'seq_len': 20, 'vocab_size': vocab_size},
-        model_configs=model_configs,
-        num_epochs=20,
-        batch_size=32,
-        device=device
-    )
-    all_results['copy_task'] = {
-        'standard': copy_results['standard'].to_dict(),
-        'gated': copy_results['gated'].to_dict()
+    # Collect per-run results
+    all_results = {
+        'copy_task': {'standard': {'runs': []}, 'gated': {'runs': []}},
+        'associative_recall': {'standard': {'runs': []}, 'gated': {'runs': []}}
     }
 
-    # Associative recall experiment (simplified: 2 pairs instead of 5)
-    recall_results = run_experiment(
-        task_name="Associative Recall",
-        task_class=AssociativeRecallDataset,
-        task_kwargs={'num_pairs': 2, 'vocab_size': vocab_size},
-        model_configs=model_configs,
-        num_epochs=30,
-        batch_size=32,
-        device=device
-    )
-    all_results['associative_recall'] = {
-        'standard': recall_results['standard'].to_dict(),
-        'gated': recall_results['gated'].to_dict()
+    for seed in range(NUM_SEEDS):
+        print(f"\n{'#'*60}")
+        print(f"# SEED {seed + 1}/{NUM_SEEDS}")
+        print(f"{'#'*60}")
+
+        set_seed(seed)
+
+        # Copy task experiment
+        copy_results = run_experiment(
+            task_name=f"Copy Task (seed {seed})",
+            task_class=CopyTaskDataset,
+            task_kwargs={'seq_len': 20, 'vocab_size': vocab_size},
+            model_configs=model_configs,
+            num_epochs=NUM_EPOCHS,
+            batch_size=32,
+            device=device
+        )
+        all_results['copy_task']['standard']['runs'].append(
+            copy_results['standard'].to_dict()
+        )
+        all_results['copy_task']['gated']['runs'].append(
+            copy_results['gated'].to_dict()
+        )
+
+        set_seed(seed + 1000)  # Different seed offset for recall to avoid correlation
+
+        # Associative recall experiment
+        recall_results = run_experiment(
+            task_name=f"Associative Recall (seed {seed})",
+            task_class=AssociativeRecallDataset,
+            task_kwargs={'num_pairs': 2, 'vocab_size': vocab_size},
+            model_configs=model_configs,
+            num_epochs=NUM_EPOCHS,
+            batch_size=32,
+            device=device
+        )
+        all_results['associative_recall']['standard']['runs'].append(
+            recall_results['standard'].to_dict()
+        )
+        all_results['associative_recall']['gated']['runs'].append(
+            recall_results['gated'].to_dict()
+        )
+
+    # Add metadata
+    all_results['_metadata'] = {
+        'num_seeds': NUM_SEEDS,
+        'num_epochs': NUM_EPOCHS,
+        'seeds': list(range(NUM_SEEDS))
     }
 
-    # Analyze results
-    analyze_results(all_results)
+    # Analyze results (aggregate across seeds)
+    analyze_multi_seed_results(all_results)
 
     # Save results
     results_dir = os.path.dirname(os.path.abspath(__file__))
@@ -357,15 +370,6 @@ def main():
     with open(results_file, 'w') as f:
         json.dump(all_results, f, indent=2)
     print(f"\nResults saved to: {results_file}")
-
-    # Print final summary
-    print("\n" + "="*60)
-    print("SUMMARY")
-    print("="*60)
-    for task_name, task_results in all_results.items():
-        std_acc = task_results['standard']['accuracy_history'][-1]
-        gated_acc = task_results['gated']['accuracy_history'][-1]
-        print(f"{task_name}: Standard={std_acc:.4f}, Gated={gated_acc:.4f}")
 
 
 if __name__ == '__main__':
