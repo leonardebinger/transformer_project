@@ -6,7 +6,7 @@ This script runs experiments on three synthetic tasks:
 2. Associative Recall - Tests key-value memory retrieval
 3. Selective Copy - Tests distractor filtering (gating showcase)
 
-Designed to run within a few hours on A100.
+Designed to run within a few hours on A100 with AMP (float16).
 """
 
 import sys
@@ -37,12 +37,12 @@ class ModelConfig:
     """Model configuration (same for both standard and gated)."""
     vocab_size: int = 36
     d_model: int = 128
-    n_heads: int = 4
+    n_heads: int = 8       # 8 heads (d_k=16) for finer-grained gating
     num_encoder_layers: int = 2
     num_decoder_layers: int = 2
     dim_feedforward: int = 256
-    dropout: float = 0.0  # No dropout for fair comparison
-    max_len: int = 256
+    dropout: float = 0.0   # No dropout for fair comparison
+    max_len: int = 1024    # Support sequences up to 512 tokens
 
 
 @dataclass
@@ -77,49 +77,6 @@ def get_linear_warmup_scheduler(optimizer, warmup_steps: int, total_steps: int):
     return LambdaLR(optimizer, lr_lambda)
 
 
-def compute_metrics(
-    predictions: torch.Tensor,
-    targets: torch.Tensor,
-    loss_mask: torch.Tensor,
-    distractor_tokens: Optional[set] = None
-) -> Dict[str, float]:
-    """
-    Compute evaluation metrics.
-
-    Args:
-        predictions: (batch, seq_len) predicted token ids
-        targets: (batch, seq_len) target token ids
-        loss_mask: (batch, seq_len) boolean mask for valid positions
-        distractor_tokens: Optional set of distractor token IDs for leakage computation
-
-    Returns:
-        Dictionary with metrics
-    """
-    # Token accuracy
-    correct = ((predictions == targets) & loss_mask).sum().item()
-    total = loss_mask.sum().item()
-    token_accuracy = correct / total if total > 0 else 0.0
-
-    # Exact match accuracy (all tokens in sequence correct)
-    seq_correct = ((predictions == targets) | ~loss_mask).all(dim=1)
-    exact_match = seq_correct.float().mean().item()
-
-    metrics = {
-        'token_accuracy': token_accuracy,
-        'exact_match': exact_match
-    }
-
-    # Leakage rate (for selective copy)
-    if distractor_tokens is not None:
-        in_distractor = torch.zeros_like(predictions, dtype=torch.bool)
-        for tok in distractor_tokens:
-            in_distractor |= (predictions == tok)
-        leakage = (in_distractor & loss_mask).sum().item()
-        metrics['leakage_rate'] = leakage / total if total > 0 else 0.0
-
-    return metrics
-
-
 class MetricsTracker:
     """Track metrics during training."""
 
@@ -128,7 +85,6 @@ class MetricsTracker:
         self.val_losses = []
         self.token_accuracies = []
         self.exact_matches = []
-        self.leakage_rates = []
         self.gate_means = []
         self.gate_stds = []
         self.steps = []
@@ -140,7 +96,6 @@ class MetricsTracker:
         self.val_losses.append(val_loss)
         self.token_accuracies.append(metrics.get('token_accuracy', 0))
         self.exact_matches.append(metrics.get('exact_match', 0))
-        self.leakage_rates.append(metrics.get('leakage_rate', None))
 
         if gate_stats:
             self.gate_means.append(gate_stats.get('gate_mean', 0.5))
@@ -153,7 +108,6 @@ class MetricsTracker:
             'val_losses': self.val_losses,
             'token_accuracies': self.token_accuracies,
             'exact_matches': self.exact_matches,
-            'leakage_rates': self.leakage_rates,
             'gate_means': self.gate_means,
             'gate_stds': self.gate_stds
         }
@@ -165,9 +119,11 @@ def train_step(
     optimizer: torch.optim.Optimizer,
     criterion: nn.Module,
     max_grad_norm: float,
+    scaler: torch.amp.GradScaler,
+    use_amp: bool,
     collect_gate_stats: bool = False
 ) -> tuple:
-    """Execute one training step."""
+    """Execute one training step with optional AMP."""
     model.train()
 
     src = batch['src']
@@ -182,23 +138,26 @@ def train_step(
     tgt_mask_input = tgt_mask[:, :-1]
     loss_mask_shifted = loss_mask[:, 1:]
 
-    optimizer.zero_grad()
+    optimizer.zero_grad(set_to_none=True)
 
-    # Forward pass
+    # Forward pass with AMP
     gate_stats = None
-    if collect_gate_stats and hasattr(model, 'forward_with_gate_stats'):
-        logits, gate_stats = model.forward_with_gate_stats(src, tgt_input, src_mask, tgt_mask_input)
-    else:
-        logits = model(src, tgt_input, src_mask, tgt_mask_input)
+    with torch.amp.autocast('cuda', enabled=use_amp):
+        if collect_gate_stats and hasattr(model, 'forward_with_gate_stats'):
+            logits, gate_stats = model.forward_with_gate_stats(src, tgt_input, src_mask, tgt_mask_input)
+        else:
+            logits = model(src, tgt_input, src_mask, tgt_mask_input)
 
-    # Compute masked loss
-    loss_per_token = criterion(logits.transpose(1, 2), tgt_output)  # (batch, seq_len)
-    masked_loss = (loss_per_token * loss_mask_shifted.float()).sum() / loss_mask_shifted.sum()
+        # Compute masked loss
+        loss_per_token = criterion(logits.transpose(1, 2), tgt_output)  # (batch, seq_len)
+        masked_loss = (loss_per_token * loss_mask_shifted.float()).sum() / loss_mask_shifted.sum()
 
-    # Backward pass
-    masked_loss.backward()
+    # Backward pass with gradient scaling
+    scaler.scale(masked_loss).backward()
+    scaler.unscale_(optimizer)
     torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
-    optimizer.step()
+    scaler.step(optimizer)
+    scaler.update()
 
     return masked_loss.item(), gate_stats
 
@@ -209,7 +168,7 @@ def evaluate(
     dataloader: DataLoader,
     criterion: nn.Module,
     device: torch.device,
-    distractor_tokens: Optional[set] = None
+    use_amp: bool
 ) -> tuple:
     """Evaluate model on validation set."""
     model.eval()
@@ -222,7 +181,6 @@ def evaluate(
     total_correct = 0
     total_exact_match = 0
     total_sequences = 0
-    total_leakage = 0
 
     for batch in dataloader:
         src = batch['src'].to(device)
@@ -236,11 +194,13 @@ def evaluate(
         tgt_mask_input = tgt_mask[:, :-1]
         loss_mask_shifted = loss_mask[:, 1:]
 
-        logits = model(src, tgt_input, src_mask, tgt_mask_input)
+        with torch.amp.autocast('cuda', enabled=use_amp):
+            logits = model(src, tgt_input, src_mask, tgt_mask_input)
 
-        # Compute loss
-        loss_per_token = criterion(logits.transpose(1, 2), tgt_output)
-        masked_loss = (loss_per_token * loss_mask_shifted.float()).sum()
+            # Compute loss
+            loss_per_token = criterion(logits.transpose(1, 2), tgt_output)
+            masked_loss = (loss_per_token * loss_mask_shifted.float()).sum()
+
         batch_tokens = loss_mask_shifted.sum().item()
         total_loss += masked_loss.item()
         total_tokens += batch_tokens
@@ -257,23 +217,12 @@ def evaluate(
         total_exact_match += seq_correct.sum().item()
         total_sequences += predictions.size(0)
 
-        # Leakage (for selective copy)
-        if distractor_tokens is not None:
-            in_distractor = torch.zeros_like(predictions, dtype=torch.bool)
-            for tok in distractor_tokens:
-                in_distractor |= (predictions == tok)
-            leakage = (in_distractor & loss_mask_shifted).sum().item()
-            total_leakage += leakage
-
     avg_loss = total_loss / total_tokens if total_tokens > 0 else 0
 
     metrics = {
         'token_accuracy': total_correct / total_tokens if total_tokens > 0 else 0.0,
         'exact_match': total_exact_match / total_sequences if total_sequences > 0 else 0.0
     }
-
-    if distractor_tokens is not None:
-        metrics['leakage_rate'] = total_leakage / total_tokens if total_tokens > 0 else 0.0
 
     return avg_loss, metrics
 
@@ -285,9 +234,9 @@ def train_model(
     training_config: TrainingConfig,
     total_steps: int,
     device: torch.device,
+    use_amp: bool,
     model_name: str = "Model",
     collect_gate_stats: bool = False,
-    distractor_tokens: Optional[set] = None
 ) -> MetricsTracker:
     """Train model and track metrics."""
     optimizer = torch.optim.AdamW(
@@ -299,6 +248,7 @@ def train_model(
         optimizer, training_config.warmup_steps, total_steps
     )
     criterion = nn.CrossEntropyLoss(reduction='none')
+    scaler = torch.amp.GradScaler('cuda', enabled=use_amp)
 
     tracker = MetricsTracker()
     train_iter = iter(train_loader)
@@ -314,12 +264,13 @@ def train_model(
             batch = next(train_iter)
 
         # Move to device
-        batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
+        batch = {k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v
+                 for k, v in batch.items()}
 
         # Train step
         loss, gate_stats = train_step(
             model, batch, optimizer, criterion,
-            training_config.max_grad_norm, collect_gate_stats
+            training_config.max_grad_norm, scaler, use_amp, collect_gate_stats
         )
         scheduler.step()
 
@@ -337,16 +288,12 @@ def train_model(
         # Evaluate
         if step % training_config.eval_every == 0 or step == total_steps:
             avg_train_loss = running_loss / running_count
-            val_loss, metrics = evaluate(model, val_loader, criterion, device, distractor_tokens)
+            val_loss, metrics = evaluate(model, val_loader, criterion, device, use_amp)
 
             tracker.log(step, avg_train_loss, val_loss, metrics, gate_stats)
 
-            leakage_info = ""
-            if metrics.get('leakage_rate') is not None:
-                leakage_info = f", Leak: {metrics['leakage_rate']:.4f}"
-
             print(f"  [{model_name}] Step {step} - Val Loss: {val_loss:.4f}, "
-                  f"Acc: {metrics['token_accuracy']:.4f}, EM: {metrics['exact_match']:.4f}{leakage_info}")
+                  f"Acc: {metrics['token_accuracy']:.4f}, EM: {metrics['exact_match']:.4f}")
 
             running_loss = 0
             running_count = 0
@@ -358,7 +305,8 @@ def run_task_experiment(
     task_config: TaskConfig,
     model_config: ModelConfig,
     training_config: TrainingConfig,
-    device: torch.device
+    device: torch.device,
+    use_amp: bool
 ) -> Dict[str, Any]:
     """Run experiment for a single task comparing both models."""
     print(f"\n{'='*60}")
@@ -369,56 +317,71 @@ def run_task_experiment(
     # Create datasets with fixed seeds for reproducibility
     train_dataset = task_config.dataset_class(
         num_samples=task_config.num_train_samples,
-        seed=42,
+        seed=137,
         **task_config.dataset_kwargs
     )
     val_dataset = task_config.dataset_class(
         num_samples=task_config.num_val_samples,
-        seed=43,
+        seed=139,
         **task_config.dataset_kwargs
     )
 
-    # Create dataloaders
+    # Create dataloaders with GPU-optimized settings
+    use_cuda = device.type == 'cuda'
     train_loader = DataLoader(
         train_dataset,
         batch_size=training_config.batch_size,
         shuffle=True,
         collate_fn=lambda b: collate_synthetic(b, PAD_IDX),
-        num_workers=0,
-        pin_memory=True if device.type == 'cuda' else False
+        num_workers=4 if use_cuda else 0,
+        pin_memory=use_cuda,
+        persistent_workers=True if use_cuda else False
     )
     val_loader = DataLoader(
         val_dataset,
         batch_size=training_config.batch_size,
         shuffle=False,
         collate_fn=lambda b: collate_synthetic(b, PAD_IDX),
-        num_workers=0
+        num_workers=4 if use_cuda else 0,
+        pin_memory=use_cuda,
+        persistent_workers=True if use_cuda else False
     )
 
-    # Get distractor tokens for selective copy
-    distractor_tokens = None
-    if hasattr(train_dataset, 'get_distractor_token_set'):
-        distractor_tokens = train_dataset.get_distractor_token_set()
-
     results = {'task': task_config.name}
+
+    # Set seed for model init reproducibility
+    torch.manual_seed(42)
+    if use_cuda:
+        torch.cuda.manual_seed(42)
 
     # Train standard model
     print("\n--- Standard Attention ---")
     standard_model = Transformer(**asdict(model_config)).to(device)
     results['standard'] = train_model(
         standard_model, train_loader, val_loader, training_config,
-        task_config.training_steps, device, "Standard",
-        collect_gate_stats=False, distractor_tokens=distractor_tokens
+        task_config.training_steps, device, use_amp, "Standard",
+        collect_gate_stats=False,
     ).to_dict()
+    del standard_model
+    if use_cuda:
+        torch.cuda.empty_cache()
+
+    # Reset seed for identical init
+    torch.manual_seed(42)
+    if use_cuda:
+        torch.cuda.manual_seed(42)
 
     # Train gated model
     print("\n--- Gated Attention ---")
     gated_model = GatedTransformer(**asdict(model_config)).to(device)
     results['gated'] = train_model(
         gated_model, train_loader, val_loader, training_config,
-        task_config.training_steps, device, "Gated",
-        collect_gate_stats=True, distractor_tokens=distractor_tokens
+        task_config.training_steps, device, use_amp, "Gated",
+        collect_gate_stats=True,
     ).to_dict()
+    del gated_model
+    if use_cuda:
+        torch.cuda.empty_cache()
 
     return results
 
@@ -493,20 +456,6 @@ def generate_figures(all_results: Dict[str, Any], output_dir: str):
             plt.savefig(os.path.join(output_dir, f'{task_name}_gate.png'), dpi=150)
             plt.close()
 
-        # Figure 4: Leakage rate (for selective copy)
-        if std['leakage_rates'][0] is not None:
-            fig, ax = plt.subplots(figsize=(10, 6))
-            ax.plot(steps, std['leakage_rates'], 'b-', label='Standard', linewidth=2)
-            ax.plot(steps, gated['leakage_rates'], 'r-', label='Gated', linewidth=2)
-            ax.set_xlabel('Training Steps')
-            ax.set_ylabel('Leakage Rate')
-            ax.set_title(f'{task_name}: Distractor Leakage Rate')
-            ax.legend()
-            ax.set_ylim([0, max(max(std['leakage_rates']), max(gated['leakage_rates'])) * 1.1 + 0.01])
-            plt.tight_layout()
-            plt.savefig(os.path.join(output_dir, f'{task_name}_leakage.png'), dpi=150)
-            plt.close()
-
     # Combined summary figure
     task_names = [k for k in all_results.keys() if k != 'metadata']
     if task_names:
@@ -548,7 +497,7 @@ def print_summary(all_results: Dict[str, Any]):
     print("\n" + "="*80)
     print("RESULTS SUMMARY")
     print("="*80)
-    print(f"{'Task':<20} {'Model':<10} {'Token Acc':<12} {'Exact Match':<12} {'Leakage':<10}")
+    print(f"{'Task':<20} {'Model':<10} {'Token Acc':<12} {'Exact Match':<12}")
     print("-"*80)
 
     for task_name, task_results in all_results.items():
@@ -559,10 +508,8 @@ def print_summary(all_results: Dict[str, Any]):
             results = task_results[model_name]
             token_acc = results['token_accuracies'][-1]
             exact_match = results['exact_matches'][-1]
-            leakage = results['leakage_rates'][-1]
-            leakage_str = f"{leakage:.4f}" if leakage is not None else "N/A"
 
-            print(f"{task_name:<20} {model_name:<10} {token_acc:<12.4f} {exact_match:<12.4f} {leakage_str:<10}")
+            print(f"{task_name:<20} {model_name:<10} {token_acc:<12.4f} {exact_match:<12.4f}")
 
     print("="*80)
 
@@ -577,11 +524,20 @@ def main():
                         help='Tasks to run')
     parser.add_argument('--quick', action='store_true',
                         help='Quick run with reduced steps for testing')
+    parser.add_argument('--no-amp', action='store_true',
+                        help='Disable automatic mixed precision')
     args = parser.parse_args()
 
     # Setup device
     device = torch.device(args.device if torch.cuda.is_available() else 'cpu')
+    use_amp = device.type == 'cuda' and not args.no_amp
     print(f"Using device: {device}")
+    print(f"AMP (float16): {'enabled' if use_amp else 'disabled'}")
+
+    # CUDA optimizations
+    if device.type == 'cuda':
+        torch.backends.cudnn.benchmark = True
+        torch.set_float32_matmul_precision('high')
 
     # Create output directory
     os.makedirs(args.output_dir, exist_ok=True)
@@ -616,8 +572,8 @@ def main():
         'selective': TaskConfig(
             name='selective_copy',
             dataset_class=SelectiveCopyDataset,
-            dataset_kwargs={'min_length': 32, 'max_length': 128,
-                           'relevant_fraction': 0.5, 'vocab_size': model_config.vocab_size},
+            dataset_kwargs={'min_length': 128, 'max_length': 512,
+                           'relevant_fraction': 0.2, 'vocab_size': model_config.vocab_size},
             num_train_samples=int(100000 * sample_multiplier),
             num_val_samples=int(10000 * sample_multiplier),
             training_steps=int(20000 * step_multiplier)
@@ -632,7 +588,8 @@ def main():
                 task_configs[task_key],
                 model_config,
                 training_config,
-                device
+                device,
+                use_amp
             )
             all_results[task_configs[task_key].name] = results
 
@@ -641,7 +598,8 @@ def main():
         'model_config': asdict(model_config),
         'training_config': asdict(training_config),
         'timestamp': datetime.now().isoformat(),
-        'device': str(device)
+        'device': str(device),
+        'amp': use_amp
     }
 
     # Save results

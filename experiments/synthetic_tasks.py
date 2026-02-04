@@ -228,11 +228,12 @@ class SelectiveCopyDataset(Dataset):
         self.relevant_fraction = relevant_fraction
         self.vocab_size = vocab_size
 
-        # Split content tokens into relevant and distractor ranges (DISJOINT)
+        # Use SHARED token range for both relevant and distractor tokens.
+        # This forces the model to rely on the MARKER token for filtering
+        # rather than learning token identity shortcuts.
         content_tokens = list(range(CONTENT_START, vocab_size))
-        mid = len(content_tokens) // 2
-        self.relevant_tokens = content_tokens[:mid]      # First half: relevant
-        self.distractor_tokens = content_tokens[mid:]    # Second half: distractors
+        self.relevant_tokens = content_tokens
+        self.distractor_tokens = content_tokens
 
         if seed is not None:
             random.seed(seed)
@@ -321,9 +322,9 @@ class SelectiveCopyDataset(Dataset):
             'num_distractors': item['num_distractors']
         }
 
-    def get_distractor_token_set(self) -> set:
-        """Return set of distractor token IDs for leakage analysis."""
-        return set(self.distractor_tokens)
+    def get_distractor_token_set(self) -> None:
+        """No longer applicable — relevant and distractor tokens share the same vocabulary."""
+        return None
 
 
 def collate_synthetic(batch: List[Dict], pad_idx: int = PAD_IDX) -> Dict[str, torch.Tensor]:
