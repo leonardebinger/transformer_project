@@ -1,12 +1,11 @@
 """
 Gated Attention Experiment: Compare standard vs gated attention mechanisms.
 
-This script runs experiments on three synthetic tasks:
-1. Copy Task - Tests basic information flow
-2. Associative Recall - Tests key-value memory retrieval
-3. Selective Copy - Tests distractor filtering (gating showcase)
-
-Designed to run within a few hours on A100 with AMP (float16).
+This script runs experiments on synthetic tasks (copy task, associative recall)
+to evaluate whether gated attention mechanisms:
+1. Allow the model to ignore irrelevant tokens more effectively
+2. Converge faster or achieve lower loss
+3. Show stable convergence behavior
 """
 
 import sys
@@ -16,605 +15,357 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from torch.optim.lr_scheduler import LambdaLR
 import json
-import argparse
 from datetime import datetime
-from dataclasses import dataclass, asdict
-from typing import Dict, Any, Optional
-import matplotlib.pyplot as plt
 
-from experiments.synthetic_tasks import (
-    CopyTaskDataset, AssociativeRecallDataset, SelectiveCopyDataset,
-    collate_synthetic, PAD_IDX
-)
+from experiments.synthetic_tasks import CopyTaskDataset, AssociativeRecallDataset, collate_synthetic
 from experiments.gated_transformer import GatedTransformer
 from modelling.transformer import Transformer
 
 
-@dataclass
-class ModelConfig:
-    """Model configuration (same for both standard and gated)."""
-    vocab_size: int = 36
-    d_model: int = 128
-    n_heads: int = 8       # 8 heads (d_k=16) for finer-grained gating
-    num_encoder_layers: int = 2
-    num_decoder_layers: int = 2
-    dim_feedforward: int = 256
-    dropout: float = 0.0   # No dropout for fair comparison
-    max_len: int = 1024    # Support sequences up to 512 tokens
-
-
-@dataclass
-class TrainingConfig:
-    """Training configuration."""
-    batch_size: int = 256
-    learning_rate: float = 1e-3
-    weight_decay: float = 0.01
-    max_grad_norm: float = 1.0
-    warmup_steps: int = 500
-    eval_every: int = 500
-    log_every: int = 100
-
-
-@dataclass
-class TaskConfig:
-    """Task-specific configuration."""
-    name: str
-    dataset_class: type
-    dataset_kwargs: dict
-    num_train_samples: int
-    num_val_samples: int
-    training_steps: int
-
-
-def get_linear_warmup_scheduler(optimizer, warmup_steps: int, total_steps: int):
-    """Linear warmup then linear decay scheduler."""
-    def lr_lambda(step):
-        if step < warmup_steps:
-            return float(step) / float(max(1, warmup_steps))
-        return max(0.0, float(total_steps - step) / float(max(1, total_steps - warmup_steps)))
-    return LambdaLR(optimizer, lr_lambda)
-
-
-class MetricsTracker:
-    """Track metrics during training."""
+class ExperimentTracker:
+    """Track metrics during training for comparison."""
 
     def __init__(self):
         self.train_losses = []
         self.val_losses = []
-        self.token_accuracies = []
-        self.exact_matches = []
-        self.gate_means = []
-        self.gate_stds = []
-        self.steps = []
+        self.gate_stats_history = []
+        self.accuracy_history = []
 
-    def log(self, step: int, train_loss: float, val_loss: float, metrics: Dict,
-            gate_stats: Optional[Dict] = None):
-        self.steps.append(step)
+    def log_epoch(self, train_loss, val_loss, accuracy=None, gate_stats=None):
         self.train_losses.append(train_loss)
         self.val_losses.append(val_loss)
-        self.token_accuracies.append(metrics.get('token_accuracy', 0))
-        self.exact_matches.append(metrics.get('exact_match', 0))
+        if accuracy is not None:
+            self.accuracy_history.append(accuracy)
+        if gate_stats is not None:
+            self.gate_stats_history.append(gate_stats)
 
-        if gate_stats:
-            self.gate_means.append(gate_stats.get('gate_mean', 0.5))
-            self.gate_stds.append(gate_stats.get('gate_std', 0.0))
-
-    def to_dict(self) -> Dict:
+    def to_dict(self):
         return {
-            'steps': self.steps,
             'train_losses': self.train_losses,
             'val_losses': self.val_losses,
-            'token_accuracies': self.token_accuracies,
-            'exact_matches': self.exact_matches,
-            'gate_means': self.gate_means,
-            'gate_stds': self.gate_stds
+            'accuracy_history': self.accuracy_history,
+            'gate_stats_history': self.gate_stats_history
         }
 
 
-def train_step(
-    model: nn.Module,
-    batch: Dict[str, torch.Tensor],
-    optimizer: torch.optim.Optimizer,
-    criterion: nn.Module,
-    max_grad_norm: float,
-    scaler: torch.amp.GradScaler,
-    use_amp: bool,
-    collect_gate_stats: bool = False
-) -> tuple:
-    """Execute one training step with optional AMP."""
-    model.train()
-
-    src = batch['src']
-    tgt = batch['tgt']
-    src_mask = batch['src_mask']
-    tgt_mask = batch['tgt_mask']
-    loss_mask = batch['loss_mask']
-
-    # Teacher forcing: shift target
-    tgt_input = tgt[:, :-1]
-    tgt_output = tgt[:, 1:]
-    tgt_mask_input = tgt_mask[:, :-1]
-    loss_mask_shifted = loss_mask[:, 1:]
-
-    optimizer.zero_grad(set_to_none=True)
-
-    # Forward pass with AMP
-    gate_stats = None
-    with torch.amp.autocast('cuda', enabled=use_amp):
-        if collect_gate_stats and hasattr(model, 'forward_with_gate_stats'):
-            logits, gate_stats = model.forward_with_gate_stats(src, tgt_input, src_mask, tgt_mask_input)
-        else:
-            logits = model(src, tgt_input, src_mask, tgt_mask_input)
-
-        # Compute masked loss
-        loss_per_token = criterion(logits.transpose(1, 2), tgt_output)  # (batch, seq_len)
-        masked_loss = (loss_per_token * loss_mask_shifted.float()).sum() / loss_mask_shifted.sum()
-
-    # Backward pass with gradient scaling
-    scaler.scale(masked_loss).backward()
-    scaler.unscale_(optimizer)
-    torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
-    scaler.step(optimizer)
-    scaler.update()
-
-    return masked_loss.item(), gate_stats
-
-
-@torch.no_grad()
-def evaluate(
-    model: nn.Module,
-    dataloader: DataLoader,
-    criterion: nn.Module,
-    device: torch.device,
-    use_amp: bool
-) -> tuple:
-    """Evaluate model on validation set."""
+def compute_accuracy(model, dataloader, device, pad_idx=0):
+    """Compute token-level accuracy (excluding padding)."""
     model.eval()
+    correct = 0
+    total = 0
 
-    total_loss = 0.0
-    total_tokens = 0
+    with torch.no_grad():
+        for batch in dataloader:
+            src = batch['src'].to(device)
+            tgt = batch['tgt'].to(device)
+            src_mask = batch['src_mask'].to(device)
+            tgt_mask = batch['tgt_mask'].to(device)
 
-    # Accumulate metrics incrementally instead of concatenating tensors
-    # (different batches may have different sequence lengths due to padding)
-    total_correct = 0
-    total_exact_match = 0
-    total_sequences = 0
+            tgt_input = tgt[:, :-1]
+            tgt_output = tgt[:, 1:]
+            tgt_mask_input = tgt_mask[:, :-1]
 
-    for batch in dataloader:
-        src = batch['src'].to(device)
-        tgt = batch['tgt'].to(device)
-        src_mask = batch['src_mask'].to(device)
-        tgt_mask = batch['tgt_mask'].to(device)
-        loss_mask = batch['loss_mask'].to(device)
-
-        tgt_input = tgt[:, :-1]
-        tgt_output = tgt[:, 1:]
-        tgt_mask_input = tgt_mask[:, :-1]
-        loss_mask_shifted = loss_mask[:, 1:]
-
-        with torch.amp.autocast('cuda', enabled=use_amp):
             logits = model(src, tgt_input, src_mask, tgt_mask_input)
+            predictions = logits.argmax(dim=-1)
 
-            # Compute loss
-            loss_per_token = criterion(logits.transpose(1, 2), tgt_output)
-            masked_loss = (loss_per_token * loss_mask_shifted.float()).sum()
+            # Mask out padding
+            non_pad_mask = tgt_output != pad_idx
+            correct += ((predictions == tgt_output) & non_pad_mask).sum().item()
+            total += non_pad_mask.sum().item()
 
-        batch_tokens = loss_mask_shifted.sum().item()
-        total_loss += masked_loss.item()
-        total_tokens += batch_tokens
-
-        # Compute metrics for this batch
-        predictions = logits.argmax(dim=-1)
-
-        # Token accuracy
-        correct = ((predictions == tgt_output) & loss_mask_shifted).sum().item()
-        total_correct += correct
-
-        # Exact match (all tokens in sequence correct)
-        seq_correct = ((predictions == tgt_output) | ~loss_mask_shifted).all(dim=1)
-        total_exact_match += seq_correct.sum().item()
-        total_sequences += predictions.size(0)
-
-    avg_loss = total_loss / total_tokens if total_tokens > 0 else 0
-
-    metrics = {
-        'token_accuracy': total_correct / total_tokens if total_tokens > 0 else 0.0,
-        'exact_match': total_exact_match / total_sequences if total_sequences > 0 else 0.0
-    }
-
-    return avg_loss, metrics
+    return correct / total if total > 0 else 0.0
 
 
-def train_model(
-    model: nn.Module,
-    train_loader: DataLoader,
-    val_loader: DataLoader,
-    training_config: TrainingConfig,
-    total_steps: int,
-    device: torch.device,
-    use_amp: bool,
-    model_name: str = "Model",
-    collect_gate_stats: bool = False,
-) -> MetricsTracker:
-    """Train model and track metrics."""
-    optimizer = torch.optim.AdamW(
-        model.parameters(),
-        lr=training_config.learning_rate,
-        weight_decay=training_config.weight_decay
-    )
-    scheduler = get_linear_warmup_scheduler(
-        optimizer, training_config.warmup_steps, total_steps
-    )
-    criterion = nn.CrossEntropyLoss(reduction='none')
-    scaler = torch.amp.GradScaler('cuda', enabled=use_amp)
+def train_model(model, train_loader, val_loader, num_epochs, device,
+                pad_idx=0, collect_gate_stats=False, model_name="Model"):
+    """Train a model and track metrics."""
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=0.01)
+    criterion = nn.CrossEntropyLoss(ignore_index=pad_idx)
+    tracker = ExperimentTracker()
 
-    tracker = MetricsTracker()
-    train_iter = iter(train_loader)
-    running_loss = 0
-    running_count = 0
+    for epoch in range(num_epochs):
+        # Training
+        model.train()
+        total_train_loss = 0
+        num_batches = 0
+        epoch_gate_stats = []
 
-    for step in range(1, total_steps + 1):
-        # Get next batch (cycle through dataset)
-        try:
-            batch = next(train_iter)
-        except StopIteration:
-            train_iter = iter(train_loader)
-            batch = next(train_iter)
+        for batch in train_loader:
+            src = batch['src'].to(device)
+            tgt = batch['tgt'].to(device)
+            src_mask = batch['src_mask'].to(device)
+            tgt_mask = batch['tgt_mask'].to(device)
 
-        # Move to device
-        batch = {k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v
-                 for k, v in batch.items()}
+            tgt_input = tgt[:, :-1]
+            tgt_output = tgt[:, 1:]
+            tgt_mask_input = tgt_mask[:, :-1]
 
-        # Train step
-        loss, gate_stats = train_step(
-            model, batch, optimizer, criterion,
-            training_config.max_grad_norm, scaler, use_amp, collect_gate_stats
-        )
-        scheduler.step()
+            optimizer.zero_grad()
 
-        running_loss += loss
-        running_count += 1
+            if collect_gate_stats and hasattr(model, 'forward_with_gate_stats'):
+                logits, gate_stats = model.forward_with_gate_stats(
+                    src, tgt_input, src_mask, tgt_mask_input
+                )
+                epoch_gate_stats.append(gate_stats)
+            else:
+                logits = model(src, tgt_input, src_mask, tgt_mask_input)
 
-        # Log progress
-        if step % training_config.log_every == 0:
-            avg_train_loss = running_loss / running_count
-            gate_info = ""
-            if gate_stats:
-                gate_info = f", Gate: {gate_stats['gate_mean']:.3f}"
-            print(f"  [{model_name}] Step {step}/{total_steps} - Loss: {avg_train_loss:.4f}{gate_info}")
+            logits = logits.reshape(-1, logits.size(-1))
+            tgt_output = tgt_output.reshape(-1)
 
-        # Evaluate
-        if step % training_config.eval_every == 0 or step == total_steps:
-            avg_train_loss = running_loss / running_count
-            val_loss, metrics = evaluate(model, val_loader, criterion, device, use_amp)
+            loss = criterion(logits, tgt_output)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            optimizer.step()
 
-            tracker.log(step, avg_train_loss, val_loss, metrics, gate_stats)
+            total_train_loss += loss.item()
+            num_batches += 1
 
-            print(f"  [{model_name}] Step {step} - Val Loss: {val_loss:.4f}, "
-                  f"Acc: {metrics['token_accuracy']:.4f}, EM: {metrics['exact_match']:.4f}")
+        train_loss = total_train_loss / num_batches
 
-            running_loss = 0
-            running_count = 0
+        # Validation
+        model.eval()
+        total_val_loss = 0
+        num_val_batches = 0
+
+        with torch.no_grad():
+            for batch in val_loader:
+                src = batch['src'].to(device)
+                tgt = batch['tgt'].to(device)
+                src_mask = batch['src_mask'].to(device)
+                tgt_mask = batch['tgt_mask'].to(device)
+
+                tgt_input = tgt[:, :-1]
+                tgt_output = tgt[:, 1:]
+                tgt_mask_input = tgt_mask[:, :-1]
+
+                logits = model(src, tgt_input, src_mask, tgt_mask_input)
+                logits = logits.reshape(-1, logits.size(-1))
+                tgt_output = tgt_output.reshape(-1)
+
+                loss = criterion(logits, tgt_output)
+                total_val_loss += loss.item()
+                num_val_batches += 1
+
+        val_loss = total_val_loss / num_val_batches
+        accuracy = compute_accuracy(model, val_loader, device, pad_idx)
+
+        # Aggregate gate stats
+        avg_gate_stats = None
+        if epoch_gate_stats:
+            avg_gate_stats = {
+                'gate_mean': sum(s['gate_mean'] for s in epoch_gate_stats) / len(epoch_gate_stats),
+                'gate_std': sum(s['gate_std'] for s in epoch_gate_stats) / len(epoch_gate_stats),
+            }
+
+        tracker.log_epoch(train_loss, val_loss, accuracy, avg_gate_stats)
+
+        # Print progress
+        gate_info = ""
+        if avg_gate_stats:
+            gate_info = f", Gate Mean: {avg_gate_stats['gate_mean']:.3f}"
+        print(f"  [{model_name}] Epoch {epoch+1:2d}/{num_epochs} - "
+              f"Train: {train_loss:.4f}, Val: {val_loss:.4f}, Acc: {accuracy:.4f}{gate_info}")
 
     return tracker
 
 
-def run_task_experiment(
-    task_config: TaskConfig,
-    model_config: ModelConfig,
-    training_config: TrainingConfig,
-    device: torch.device,
-    use_amp: bool
-) -> Dict[str, Any]:
-    """Run experiment for a single task comparing both models."""
+def run_experiment(task_name, task_class, task_kwargs, model_configs,
+                   num_epochs=20, batch_size=32, device='cpu'):
+    """
+    Run comparison experiment between standard and gated attention.
+
+    Returns:
+        Dict with results for both models
+    """
     print(f"\n{'='*60}")
-    print(f"Task: {task_config.name}")
-    print(f"Training steps: {task_config.training_steps}")
+    print(f"Experiment: {task_name}")
     print(f"{'='*60}")
 
-    # Create datasets with fixed seeds for reproducibility
-    train_dataset = task_config.dataset_class(
-        num_samples=task_config.num_train_samples,
-        seed=137,
-        **task_config.dataset_kwargs
-    )
-    val_dataset = task_config.dataset_class(
-        num_samples=task_config.num_val_samples,
-        seed=139,
-        **task_config.dataset_kwargs
-    )
+    # Create datasets
+    train_dataset = task_class(num_samples=1000, **task_kwargs)
+    val_dataset = task_class(num_samples=200, **task_kwargs)
 
-    # Create dataloaders with GPU-optimized settings
-    use_cuda = device.type == 'cuda'
+    pad_idx = task_kwargs.get('pad_idx', 0)
     train_loader = DataLoader(
-        train_dataset,
-        batch_size=training_config.batch_size,
-        shuffle=True,
-        collate_fn=lambda b: collate_synthetic(b, PAD_IDX),
-        num_workers=4 if use_cuda else 0,
-        pin_memory=use_cuda,
-        persistent_workers=True if use_cuda else False
+        train_dataset, batch_size=batch_size, shuffle=True,
+        collate_fn=lambda b: collate_synthetic(b, pad_idx)
     )
     val_loader = DataLoader(
-        val_dataset,
-        batch_size=training_config.batch_size,
-        shuffle=False,
-        collate_fn=lambda b: collate_synthetic(b, PAD_IDX),
-        num_workers=4 if use_cuda else 0,
-        pin_memory=use_cuda,
-        persistent_workers=True if use_cuda else False
+        val_dataset, batch_size=batch_size, shuffle=False,
+        collate_fn=lambda b: collate_synthetic(b, pad_idx)
     )
 
-    results = {'task': task_config.name}
-
-    # Set seed for model init reproducibility
-    torch.manual_seed(42)
-    if use_cuda:
-        torch.cuda.manual_seed(42)
+    results = {}
 
     # Train standard model
     print("\n--- Standard Attention ---")
-    standard_model = Transformer(**asdict(model_config)).to(device)
+    standard_model = Transformer(**model_configs['standard']).to(device)
     results['standard'] = train_model(
-        standard_model, train_loader, val_loader, training_config,
-        task_config.training_steps, device, use_amp, "Standard",
-        collect_gate_stats=False,
-    ).to_dict()
-    del standard_model
-    if use_cuda:
-        torch.cuda.empty_cache()
-
-    # Reset seed for identical init
-    torch.manual_seed(42)
-    if use_cuda:
-        torch.cuda.manual_seed(42)
+        standard_model, train_loader, val_loader, num_epochs, device, pad_idx,
+        model_name="Standard"
+    )
 
     # Train gated model
     print("\n--- Gated Attention ---")
-    gated_model = GatedTransformer(**asdict(model_config)).to(device)
+    gated_model = GatedTransformer(**model_configs['gated']).to(device)
     results['gated'] = train_model(
-        gated_model, train_loader, val_loader, training_config,
-        task_config.training_steps, device, use_amp, "Gated",
-        collect_gate_stats=True,
-    ).to_dict()
-    del gated_model
-    if use_cuda:
-        torch.cuda.empty_cache()
+        gated_model, train_loader, val_loader, num_epochs, device, pad_idx,
+        collect_gate_stats=True, model_name="Gated"
+    )
 
     return results
 
 
-def generate_figures(all_results: Dict[str, Any], output_dir: str):
-    """Generate comparison figures for all tasks."""
-    os.makedirs(output_dir, exist_ok=True)
+def analyze_results(all_results):
+    """Analyze and print comparison of results."""
+    print("\n" + "="*60)
+    print("ANALYSIS")
+    print("="*60)
 
     for task_name, task_results in all_results.items():
-        if task_name == 'metadata':
-            continue
+        print(f"\n{task_name.upper().replace('_', ' ')}:")
+        print("-" * 40)
 
-        std = task_results['standard']
-        gated = task_results['gated']
-        steps = std['steps']
+        std_metrics = task_results['standard']
+        gated_metrics = task_results['gated']
 
-        # Figure 1: Loss curves
-        fig, ax = plt.subplots(figsize=(10, 6))
-        ax.plot(steps, std['train_losses'], 'b-', label='Standard Train', alpha=0.7)
-        ax.plot(steps, std['val_losses'], 'b--', label='Standard Val', linewidth=2)
-        ax.plot(steps, gated['train_losses'], 'r-', label='Gated Train', alpha=0.7)
-        ax.plot(steps, gated['val_losses'], 'r--', label='Gated Val', linewidth=2)
-        ax.set_xlabel('Training Steps')
-        ax.set_ylabel('Loss')
-        ax.set_title(f'{task_name}: Loss Curves')
-        ax.legend()
-        ax.set_yscale('log')
-        plt.tight_layout()
-        plt.savefig(os.path.join(output_dir, f'{task_name}_loss.png'), dpi=150)
-        plt.close()
+        # Final performance
+        std_final_loss = std_metrics['val_losses'][-1]
+        gated_final_loss = gated_metrics['val_losses'][-1]
+        std_final_acc = std_metrics['accuracy_history'][-1]
+        gated_final_acc = gated_metrics['accuracy_history'][-1]
 
-        # Figure 2: Accuracy curves
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+        print(f"  Final Val Loss:  Standard={std_final_loss:.4f}, Gated={gated_final_loss:.4f}")
+        print(f"  Final Accuracy:  Standard={std_final_acc:.4f}, Gated={gated_final_acc:.4f}")
 
-        ax1.plot(steps, std['token_accuracies'], 'b-', label='Standard', linewidth=2)
-        ax1.plot(steps, gated['token_accuracies'], 'r-', label='Gated', linewidth=2)
-        ax1.set_xlabel('Training Steps')
-        ax1.set_ylabel('Token Accuracy')
-        ax1.set_title(f'{task_name}: Token Accuracy')
-        ax1.legend()
-        ax1.set_ylim([0, 1.05])
+        # Convergence analysis (epochs to reach 90% of final accuracy)
+        def epochs_to_threshold(acc_history, threshold_pct=0.9):
+            if not acc_history:
+                return None
+            final_acc = acc_history[-1]
+            threshold = final_acc * threshold_pct
+            for i, acc in enumerate(acc_history):
+                if acc >= threshold:
+                    return i + 1
+            return len(acc_history)
 
-        ax2.plot(steps, std['exact_matches'], 'b-', label='Standard', linewidth=2)
-        ax2.plot(steps, gated['exact_matches'], 'r-', label='Gated', linewidth=2)
-        ax2.set_xlabel('Training Steps')
-        ax2.set_ylabel('Exact Match Accuracy')
-        ax2.set_title(f'{task_name}: Exact Match')
-        ax2.legend()
-        ax2.set_ylim([0, 1.05])
+        std_conv = epochs_to_threshold(std_metrics['accuracy_history'])
+        gated_conv = epochs_to_threshold(gated_metrics['accuracy_history'])
+        print(f"  Epochs to 90%:   Standard={std_conv}, Gated={gated_conv}")
 
-        plt.tight_layout()
-        plt.savefig(os.path.join(output_dir, f'{task_name}_accuracy.png'), dpi=150)
-        plt.close()
+        # Loss decrease rate (first 5 epochs)
+        def loss_decrease_rate(losses, n=5):
+            if len(losses) < 2:
+                return 0
+            n = min(n, len(losses))
+            return (losses[0] - losses[n-1]) / n
 
-        # Figure 3: Gate statistics (if available)
-        if gated['gate_means']:
-            fig, ax = plt.subplots(figsize=(10, 6))
-            ax.plot(steps, gated['gate_means'], 'g-', label='Gate Mean', linewidth=2)
-            ax.fill_between(
-                steps,
-                [m - s for m, s in zip(gated['gate_means'], gated['gate_stds'])],
-                [m + s for m, s in zip(gated['gate_means'], gated['gate_stds'])],
-                alpha=0.3, color='g'
-            )
-            ax.axhline(y=0.5, color='gray', linestyle='--', alpha=0.5, label='Neutral (0.5)')
-            ax.set_xlabel('Training Steps')
-            ax.set_ylabel('Gate Activation')
-            ax.set_title(f'{task_name}: Gate Statistics')
-            ax.legend()
-            ax.set_ylim([0, 1])
-            plt.tight_layout()
-            plt.savefig(os.path.join(output_dir, f'{task_name}_gate.png'), dpi=150)
-            plt.close()
+        std_rate = loss_decrease_rate(std_metrics['train_losses'])
+        gated_rate = loss_decrease_rate(gated_metrics['train_losses'])
+        print(f"  Loss Decrease/Epoch (first 5): Standard={std_rate:.4f}, Gated={gated_rate:.4f}")
 
-    # Combined summary figure
-    task_names = [k for k in all_results.keys() if k != 'metadata']
-    if task_names:
-        fig, axes = plt.subplots(1, len(task_names), figsize=(5*len(task_names), 5))
-        if len(task_names) == 1:
-            axes = [axes]
+        # Gate statistics
+        if gated_metrics['gate_stats_history']:
+            final_gate = gated_metrics['gate_stats_history'][-1]
+            first_gate = gated_metrics['gate_stats_history'][0]
+            print(f"  Gate Mean:       First={first_gate['gate_mean']:.3f}, Final={final_gate['gate_mean']:.3f}")
 
-        for i, task_name in enumerate(task_names):
-            ax = axes[i]
-            std = all_results[task_name]['standard']
-            gated = all_results[task_name]['gated']
-
-            # Bar chart of final metrics
-            metrics = ['Token Acc', 'Exact Match']
-            x = range(len(metrics))
-            std_vals = [std['token_accuracies'][-1], std['exact_matches'][-1]]
-            gated_vals = [gated['token_accuracies'][-1], gated['exact_matches'][-1]]
-
-            width = 0.35
-            ax.bar([xi - width/2 for xi in x], std_vals, width, label='Standard', color='blue', alpha=0.7)
-            ax.bar([xi + width/2 for xi in x], gated_vals, width, label='Gated', color='red', alpha=0.7)
-
-            ax.set_ylabel('Score')
-            ax.set_title(task_name)
-            ax.set_xticks(x)
-            ax.set_xticklabels(metrics)
-            ax.legend()
-            ax.set_ylim([0, 1.1])
-
-        plt.tight_layout()
-        plt.savefig(os.path.join(output_dir, 'summary.png'), dpi=150)
-        plt.close()
-
-    print(f"\nFigures saved to: {output_dir}")
-
-
-def print_summary(all_results: Dict[str, Any]):
-    """Print summary table of results."""
-    print("\n" + "="*80)
-    print("RESULTS SUMMARY")
-    print("="*80)
-    print(f"{'Task':<20} {'Model':<10} {'Token Acc':<12} {'Exact Match':<12}")
-    print("-"*80)
-
-    for task_name, task_results in all_results.items():
-        if task_name == 'metadata':
-            continue
-
-        for model_name in ['standard', 'gated']:
-            results = task_results[model_name]
-            token_acc = results['token_accuracies'][-1]
-            exact_match = results['exact_matches'][-1]
-
-            print(f"{task_name:<20} {model_name:<10} {token_acc:<12.4f} {exact_match:<12.4f}")
-
-    print("="*80)
+        # Winner determination
+        loss_winner = "Gated" if gated_final_loss < std_final_loss else "Standard"
+        acc_winner = "Gated" if gated_final_acc > std_final_acc else "Standard"
+        print(f"  Better Loss:     {loss_winner}")
+        print(f"  Better Accuracy: {acc_winner}")
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Compare standard vs gated attention')
-    parser.add_argument('--device', type=str, default='cuda', help='Device to use')
-    parser.add_argument('--output-dir', type=str, default='experiments/results',
-                        help='Output directory for results')
-    parser.add_argument('--tasks', nargs='+', default=['copy', 'associative', 'selective'],
-                        choices=['copy', 'associative', 'selective'],
-                        help='Tasks to run')
-    parser.add_argument('--quick', action='store_true',
-                        help='Quick run with reduced steps for testing')
-    parser.add_argument('--no-amp', action='store_true',
-                        help='Disable automatic mixed precision')
-    args = parser.parse_args()
-
-    # Setup device
-    device = torch.device(args.device if torch.cuda.is_available() else 'cpu')
-    use_amp = device.type == 'cuda' and not args.no_amp
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
-    print(f"AMP (float16): {'enabled' if use_amp else 'disabled'}")
 
-    # CUDA optimizations
-    if device.type == 'cuda':
-        torch.backends.cudnn.benchmark = True
-        torch.set_float32_matmul_precision('high')
+    # Small model configuration
+    vocab_size = 100
+    d_model = 32
+    n_heads = 2
+    num_layers = 2
+    dim_feedforward = 64
+    dropout = 0.1
+    max_len = 64
 
-    # Create output directory
-    os.makedirs(args.output_dir, exist_ok=True)
-
-    # Model config
-    model_config = ModelConfig()
-
-    # Training config
-    training_config = TrainingConfig()
-
-    # Task configs
-    step_multiplier = 0.1 if args.quick else 1.0
-    sample_multiplier = 0.1 if args.quick else 1.0
-
-    task_configs = {
-        'copy': TaskConfig(
-            name='copy_task',
-            dataset_class=CopyTaskDataset,
-            dataset_kwargs={'min_length': 16, 'max_length': 64, 'vocab_size': model_config.vocab_size},
-            num_train_samples=int(50000 * sample_multiplier),
-            num_val_samples=int(5000 * sample_multiplier),
-            training_steps=int(10000 * step_multiplier)
-        ),
-        'associative': TaskConfig(
-            name='associative_recall',
-            dataset_class=AssociativeRecallDataset,
-            dataset_kwargs={'min_pairs': 8, 'max_pairs': 16, 'vocab_size': model_config.vocab_size},
-            num_train_samples=int(100000 * sample_multiplier),
-            num_val_samples=int(10000 * sample_multiplier),
-            training_steps=int(20000 * step_multiplier)
-        ),
-        'selective': TaskConfig(
-            name='selective_copy',
-            dataset_class=SelectiveCopyDataset,
-            dataset_kwargs={'min_length': 128, 'max_length': 512,
-                           'relevant_fraction': 0.2, 'vocab_size': model_config.vocab_size},
-            num_train_samples=int(100000 * sample_multiplier),
-            num_val_samples=int(10000 * sample_multiplier),
-            training_steps=int(20000 * step_multiplier)
-        )
+    model_configs = {
+        'standard': {
+            'vocab_size': vocab_size,
+            'd_model': d_model,
+            'n_heads': n_heads,
+            'num_encoder_layers': num_layers,
+            'num_decoder_layers': num_layers,
+            'dim_feedforward': dim_feedforward,
+            'dropout': dropout,
+            'max_len': max_len
+        },
+        'gated': {
+            'vocab_size': vocab_size,
+            'd_model': d_model,
+            'n_heads': n_heads,
+            'num_encoder_layers': num_layers,
+            'num_decoder_layers': num_layers,
+            'dim_feedforward': dim_feedforward,
+            'dropout': dropout,
+            'max_len': max_len
+        }
     }
 
-    # Run experiments
     all_results = {}
-    for task_key in args.tasks:
-        if task_key in task_configs:
-            results = run_task_experiment(
-                task_configs[task_key],
-                model_config,
-                training_config,
-                device,
-                use_amp
-            )
-            all_results[task_configs[task_key].name] = results
 
-    # Add metadata
-    all_results['metadata'] = {
-        'model_config': asdict(model_config),
-        'training_config': asdict(training_config),
-        'timestamp': datetime.now().isoformat(),
-        'device': str(device),
-        'amp': use_amp
+    # Copy task experiment
+    copy_results = run_experiment(
+        task_name="Copy Task",
+        task_class=CopyTaskDataset,
+        task_kwargs={'seq_len': 20, 'vocab_size': vocab_size},
+        model_configs=model_configs,
+        num_epochs=20,
+        batch_size=32,
+        device=device
+    )
+    all_results['copy_task'] = {
+        'standard': copy_results['standard'].to_dict(),
+        'gated': copy_results['gated'].to_dict()
     }
+
+    # Associative recall experiment (simplified: 2 pairs instead of 5)
+    recall_results = run_experiment(
+        task_name="Associative Recall",
+        task_class=AssociativeRecallDataset,
+        task_kwargs={'num_pairs': 2, 'vocab_size': vocab_size},
+        model_configs=model_configs,
+        num_epochs=30,
+        batch_size=32,
+        device=device
+    )
+    all_results['associative_recall'] = {
+        'standard': recall_results['standard'].to_dict(),
+        'gated': recall_results['gated'].to_dict()
+    }
+
+    # Analyze results
+    analyze_results(all_results)
 
     # Save results
+    results_dir = os.path.dirname(os.path.abspath(__file__))
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    results_file = os.path.join(args.output_dir, f'results_{timestamp}.json')
+    results_file = os.path.join(results_dir, f"results_{timestamp}.json")
     with open(results_file, 'w') as f:
         json.dump(all_results, f, indent=2)
     print(f"\nResults saved to: {results_file}")
 
-    # Generate figures
-    figures_dir = os.path.join(args.output_dir, 'figures')
-    generate_figures(all_results, figures_dir)
-
-    # Print summary
-    print_summary(all_results)
+    # Print final summary
+    print("\n" + "="*60)
+    print("SUMMARY")
+    print("="*60)
+    for task_name, task_results in all_results.items():
+        std_acc = task_results['standard']['accuracy_history'][-1]
+        gated_acc = task_results['gated']['accuracy_history'][-1]
+        print(f"{task_name}: Standard={std_acc:.4f}, Gated={gated_acc:.4f}")
 
 
 if __name__ == '__main__':
