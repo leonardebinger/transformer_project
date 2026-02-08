@@ -93,6 +93,43 @@ def compute_accuracy(model, dataloader, device, pad_idx=0):
     return correct / total if total > 0 else 0.0
 
 
+def _average_per_layer_stats(batch_stats_list):
+    """Average per-layer gate statistics across batches within an epoch."""
+    n = len(batch_stats_list)
+    template = batch_stats_list[0]['per_layer']
+    result = {'encoder': [], 'decoder': []}
+
+    for layer_idx in range(len(template['encoder'])):
+        layer_avg = {'layer': layer_idx, 'self': {}}
+        for key in ['gate_mean', 'gate_std', 'gate_min', 'gate_max']:
+            vals = [s['per_layer']['encoder'][layer_idx]['self'][key] for s in batch_stats_list]
+            if key == 'gate_min':
+                layer_avg['self'][key] = min(vals)
+            elif key == 'gate_max':
+                layer_avg['self'][key] = max(vals)
+            else:
+                layer_avg['self'][key] = sum(vals) / n
+        result['encoder'].append(layer_avg)
+
+    for layer_idx in range(len(template['decoder'])):
+        layer_avg = {'layer': layer_idx}
+        for attn_type in ['self', 'cross']:
+            if attn_type in template['decoder'][layer_idx]:
+                layer_avg[attn_type] = {}
+                for key in ['gate_mean', 'gate_std', 'gate_min', 'gate_max']:
+                    vals = [s['per_layer']['decoder'][layer_idx][attn_type][key]
+                            for s in batch_stats_list]
+                    if key == 'gate_min':
+                        layer_avg[attn_type][key] = min(vals)
+                    elif key == 'gate_max':
+                        layer_avg[attn_type][key] = max(vals)
+                    else:
+                        layer_avg[attn_type][key] = sum(vals) / n
+        result['decoder'].append(layer_avg)
+
+    return result
+
+
 def train_model(model, train_loader, val_loader, num_epochs, device,
                 pad_idx=0, collect_gate_stats=False, model_name="Model"):
     """Train a model and track metrics."""
@@ -174,6 +211,8 @@ def train_model(model, train_loader, val_loader, num_epochs, device,
                 'gate_mean': sum(s['gate_mean'] for s in epoch_gate_stats) / len(epoch_gate_stats),
                 'gate_std': sum(s['gate_std'] for s in epoch_gate_stats) / len(epoch_gate_stats),
             }
+            if 'per_layer' in epoch_gate_stats[0]:
+                avg_gate_stats['per_layer'] = _average_per_layer_stats(epoch_gate_stats)
 
         tracker.log_epoch(train_loss, val_loss, accuracy, avg_gate_stats)
 

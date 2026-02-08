@@ -176,26 +176,51 @@ class GatedTransformer(nn.Module):
         decoder_output, dec_gate_stats = self.decode(tgt, encoder_output, src_mask, tgt_mask, return_gate=True)
         logits = self.output_projection(decoder_output)
 
-        # Aggregate gate statistics
+        # Collect per-layer stats and aggregate
+        per_layer = {'encoder': [], 'decoder': []}
         all_gate_means = []
         all_gate_stds = []
 
-        for stats in enc_gate_stats:
+        for i, stats in enumerate(enc_gate_stats):
             if stats:
+                per_layer['encoder'].append({
+                    'layer': i,
+                    'self': {
+                        'gate_mean': stats['gate_mean'],
+                        'gate_std': stats['gate_std'],
+                        'gate_min': stats['gate_min'],
+                        'gate_max': stats['gate_max'],
+                    }
+                })
                 all_gate_means.append(stats['gate_mean'])
                 all_gate_stds.append(stats['gate_std'])
 
-        for stats in dec_gate_stats:
+        for i, stats in enumerate(dec_gate_stats):
+            layer_entry = {'layer': i}
             if 'self' in stats:
+                layer_entry['self'] = {
+                    'gate_mean': stats['self']['gate_mean'],
+                    'gate_std': stats['self']['gate_std'],
+                    'gate_min': stats['self']['gate_min'],
+                    'gate_max': stats['self']['gate_max'],
+                }
                 all_gate_means.append(stats['self']['gate_mean'])
                 all_gate_stds.append(stats['self']['gate_std'])
             if 'cross' in stats:
+                layer_entry['cross'] = {
+                    'gate_mean': stats['cross']['gate_mean'],
+                    'gate_std': stats['cross']['gate_std'],
+                    'gate_min': stats['cross']['gate_min'],
+                    'gate_max': stats['cross']['gate_max'],
+                }
                 all_gate_means.append(stats['cross']['gate_mean'])
                 all_gate_stds.append(stats['cross']['gate_std'])
+            per_layer['decoder'].append(layer_entry)
 
         aggregated_stats = {
             'gate_mean': sum(all_gate_means) / len(all_gate_means) if all_gate_means else 0,
             'gate_std': sum(all_gate_stds) / len(all_gate_stds) if all_gate_stds else 0,
+            'per_layer': per_layer,
         }
 
         return logits, aggregated_stats
